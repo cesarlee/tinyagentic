@@ -1,0 +1,22 @@
+# Secrets
+.env
+
+# User-specific data
+config.json
+CONTEXT.md
+MEMORY.md
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# Claude Code
+.claude/
+
+# IDE
+.vscode/
+.idea/

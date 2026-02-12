@@ -5,13 +5,13 @@ import threading
 from datetime import datetime
 from .config import load_config, save_config
 from .scripts import run_script
-from .macros import get_macro
+from .macros import get_macro, substitute_vars
 from .sessions import list_sessions
-from .tmux_manager import is_running, send_keys, send_text_block, get_foreground_process
+from .tmux_manager import is_running, send_keys, send_text_block, get_foreground_process, claude_ready
 
 
 def create_routine(routine_id, name, script=None, macro=None, session="*",
-                   interval_seconds=30, enabled=True, idle_only=True,
+                   interval_seconds=30, enabled=True, send_when="idle",
                    run_when_process=""):
     config = load_config()
     if routine_id in config["routines"]:
@@ -22,7 +22,7 @@ def create_routine(routine_id, name, script=None, macro=None, session="*",
         "session": session,
         "interval_seconds": interval_seconds,
         "enabled": enabled,
-        "idle_only": idle_only,
+        "send_when": send_when,
     }
     if macro:
         routine["macro"] = macro
@@ -62,7 +62,7 @@ def _execute_macro(macro_id, session_id):
     m = get_macro(macro_id)
     if not m:
         raise ValueError(f"Macro '{macro_id}' not found")
-    keys = m["keys"]
+    keys = substitute_vars(m["keys"], session_id)
     do_enter = m.get("enter", True)
     if "\n" in keys:
         send_text_block(session_id, keys)
@@ -83,6 +83,7 @@ class RoutinesDaemon:
         self._last_run = {}      # routine_id → timestamp
         self._next_run = {}      # routine_id → timestamp (for UI countdown)
         self._cooldowns = {}     # (routine_id, session_id) → timestamp
+        self.interactive_checker = None  # callback(session_id) → bool
         self.idle_checker = None  # callback(session_id) → bool
 
     def start(self) -> bool:
@@ -120,6 +121,15 @@ class RoutinesDaemon:
                 return True  # assume idle if check fails
         return True  # assume idle if no checker registered
 
+    def _is_interactive(self, session_id) -> bool:
+        """Check if the user is interactively attached to this session."""
+        if self.interactive_checker:
+            try:
+                return self.interactive_checker(session_id)
+            except Exception:
+                return False
+        return False
+
     def _main_loop(self):
         while self._running:
             routines = list_routines()
@@ -146,7 +156,11 @@ class RoutinesDaemon:
 
                 routine_type = routine.get("type", "script")
                 target_session = routine.get("session", "*")
-                idle_only = routine.get("idle_only", False)
+                # Migrate legacy idle_only → send_when
+                if "idle_only" in routine and "send_when" not in routine:
+                    send_when = "idle" if routine["idle_only"] else "always"
+                else:
+                    send_when = routine.get("send_when", "always")
 
                 if target_session == "*":
                     session_ids = [
@@ -160,9 +174,17 @@ class RoutinesDaemon:
                     if not self._running:
                         break
 
-                    # Skip non-idle sessions if idle_only is set
-                    if idle_only and not self._is_idle(sid):
+                    # Skip sessions the user is interactively attached to
+                    if self._is_interactive(sid):
                         continue
+
+                    # Check send_when condition
+                    if send_when == "idle" and not self._is_idle(sid):
+                        continue
+                    elif send_when == "claude_ready":
+                        check = claude_ready(sid)
+                        if not check["ready"]:
+                            continue
 
                     # Skip if required process is not running in session
                     run_when = routine.get("run_when_process", "")

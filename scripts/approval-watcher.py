@@ -1,40 +1,20 @@
 """Auto-approve Claude Code permission prompts.
 
-Scans the last 50 lines of a session's terminal output for known
-permission-prompt patterns and sends the appropriate keystroke.
+Only checks the bottom of the pane (last 4-6 non-empty lines) to avoid
+false positives from scroll history. Skips actively working sessions.
 """
 
-import re
 
-# Each entry: (compiled_pattern, keystroke_to_send)
-# Order matters — more specific patterns first.
-PATTERNS = [
-    # "Would you like to proceed?" with auto-accept edits option → "2"
-    (re.compile(
-        r"Would you like to proceed\?.*?1\.\s*Yes.*?auto-accept",
-        re.DOTALL,
-    ), "2"),
-    # "Do you want to ...?" with session-wide allow as option 2 → "2"
-    # Covers: proceed, overwrite, make this edit, etc.
-    (re.compile(
-        r"Do you want to\s+.+?\?.*?1\.\s*Yes\s*\n\s*2\.\s*Yes,\s*allow",
-        re.DOTALL,
-    ), "2"),
-    # "Do you want to ...?" with just Yes/No → "1"
-    (re.compile(
-        r"Do you want to\s+.+?\?.*?[❯>]\s*1\.\s*Yes",
-        re.DOTALL,
-    ), "1"),
-    # "Allow X?" with Yes option → "1"
-    (re.compile(
-        r"Allow\s+.+?\?.*?[❯>]\s*1\.\s*Yes",
-        re.DOTALL,
-    ), "1"),
-    # Generic Approve/Confirm/Proceed prompt → "1"
-    (re.compile(
-        r"(?:Allow|Approve|Confirm|Proceed)\s*\?.*?\n\s*[❯>]\s*1\.\s*Yes\s*\n\s*2\.\s*No",
-        re.DOTALL | re.IGNORECASE,
-    ), "1"),
+ACTIVE_INDICATORS = [
+    "Running", "Waiting", "esc to interrupt", "Fetching",
+    "Coalescing", "Churning", "Baking", "Mustering",
+    "Crunching", "Cooking", "Cogitating", "Fluorescing",
+    "Spelunking", "thought for", "Thinking", "Deliberating",
+]
+
+CLEAR_CONTEXT_INDICATORS = [
+    "clear context", "clear the context", "compact the context",
+    "compact context", "work on the plan", "enter plan mode",
 ]
 
 
@@ -52,16 +32,42 @@ def run(session_id, tmux):
         return {"status": "skipped"}
 
     content = tmux.capture_pane(session_id)
-    recent = "\n".join(content.strip().splitlines()[-50:])
+    all_lines = content.split("\n")
+    last_lines = [l for l in all_lines if l.strip()][-6:]
+    bottom = "\n".join(last_lines)
 
-    for pattern, keystroke in PATTERNS:
-        if pattern.search(recent):
-            # Re-capture to avoid acting on a stale prompt
-            fresh = tmux.capture_pane(session_id)
-            fresh_recent = "\n".join(fresh.strip().splitlines()[-50:])
-            if pattern.search(fresh_recent):
-                tmux.send_keys(session_id, keystroke, enter=True)
-                return {"status": "approved", "keystroke": keystroke}
-            return {"status": "stale"}
+    # Skip actively working sessions
+    if any(ind in bottom for ind in ACTIVE_INDICATORS):
+        return {"status": "clear"}
 
-    return {"status": "clear"}
+    # Detect approval prompt at the bottom
+    is_prompt = (
+        "Esc to cancel" in bottom
+        or "Do you want to proceed?" in bottom
+        or "Do you want to allow" in bottom
+        or ("❯" in bottom and "(esc)" in bottom)
+        or ("❯" in bottom and "ctrl-g to edit" in bottom)
+    )
+
+    if not is_prompt:
+        return {"status": "clear"}
+
+    # Double-check (stale guard)
+    fresh = tmux.capture_pane(session_id)
+    fresh_lines = [l for l in fresh.split("\n") if l.strip()][-6:]
+    fresh_bottom = "\n".join(fresh_lines)
+    if not any(marker in fresh_bottom for marker in
+               ["Esc to cancel", "Do you want to", "(esc)", "ctrl-g to edit"]):
+        return {"status": "stale"}
+
+    # Clear-context prompt — select option 2 (accept edits, don't clear)
+    lower = fresh_bottom.lower()
+    if any(ind in lower for ind in CLEAR_CONTEXT_INDICATORS):
+        tmux.send_special_key(session_id, "Down")
+        import time; time.sleep(0.2)
+        tmux.send_special_key(session_id, "Enter")
+        return {"status": "approved", "note": "clear-context, chose option 2"}
+
+    # Standard approval — Enter selects the highlighted option
+    tmux.send_special_key(session_id, "Enter")
+    return {"status": "approved"}

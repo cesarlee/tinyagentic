@@ -123,6 +123,66 @@ def send_keys(session_id, keys, enter=True):
         )
 
 
+def send_special_key(session_id, key):
+    """Send a special key (e.g. 'Down', 'Up', 'Tab', 'Escape') without -l flag."""
+    session_name = _session_name(session_id)
+    subprocess.run(
+        ["tmux", "send-keys", "-t", session_name, key],
+        check=True,
+    )
+
+
+# Indicators that Claude Code is actively working (don't interrupt).
+_CLAUDE_ACTIVE_INDICATORS = [
+    "Running", "Waiting", "esc to interrupt", "Fetching",
+    "Coalescing", "Churning", "Baking", "Mustering",
+    "Crunching", "Cooking", "Cogitating", "Fluorescing",
+    "Spelunking", "thought for", "Thinking", "Deliberating",
+]
+
+# Indicators that Claude Code is on an approval/confirmation prompt.
+_CLAUDE_APPROVAL_MARKERS = [
+    "Esc to cancel", "Do you want to", "(esc)", "ctrl-g to edit",
+]
+
+
+def claude_ready(session_id):
+    """Check if Claude Code is at an empty, ready-to-receive prompt.
+
+    Returns:
+        dict with:
+          ready: bool — True if safe to send input
+          reason: str — why it's ready or not
+    """
+    if not is_running(session_id):
+        return {"ready": False, "reason": "not_running"}
+
+    content = capture_pane(session_id)
+    all_lines = content.split("\n")
+    last_lines = [l for l in all_lines if l.strip()][-6:]
+    bottom = "\n".join(last_lines)
+
+    if any(ind in bottom for ind in _CLAUDE_ACTIVE_INDICATORS):
+        return {"ready": False, "reason": "active"}
+
+    if any(marker in bottom for marker in _CLAUDE_APPROVAL_MARKERS):
+        return {"ready": False, "reason": "approval_prompt"}
+
+    at_prompt = "? for shortcuts" in bottom or "accept edits on" in bottom
+    if not at_prompt:
+        return {"ready": False, "reason": "not_at_prompt"}
+
+    # Check for typed-but-unsubmitted text
+    for line in last_lines:
+        if "❯" in line:
+            after = line.split("❯", 1)[1].strip()
+            if after:
+                return {"ready": False, "reason": "has_typed_text"}
+            break
+
+    return {"ready": True, "reason": "empty_prompt"}
+
+
 def send_text_block(session_id, text):
     """Send a large block of text using tmux load-buffer + paste-buffer."""
     session_name = _session_name(session_id)

@@ -59,7 +59,8 @@ from core.tmux_manager import (
     send_keys,
 )
 from core.scripts import list_scripts, load_script, save_script, delete_script, run_script
-from core.macros import create_macro, update_macro, delete_macro, get_macro, list_macros
+from core.macros import create_macro, update_macro, delete_macro, get_macro, list_macros, substitute_vars
+from core.session_vars import list_session_vars, add_session_var, update_session_var, delete_session_var
 from core.routines import (
     create_routine,
     update_routine,
@@ -86,6 +87,9 @@ class SessionPanel(Static, can_focus=True):
         super().__init__(**kw)
         self.session_id = session_id
         self.session_name = session_name
+        config = load_config()
+        prefix = config["settings"].get("tmux_prefix", "ta")
+        self._tmux_name = f"{prefix}-{session_id}"
         self._running = False
         self._last_text = ""
         self._prev_text = ""
@@ -110,17 +114,19 @@ class SessionPanel(Static, can_focus=True):
         state = self._activity_state()
         focused = self.has_focus
 
+        tmux_id = f"tmux: {self._tmux_name}"
+
         if state == "stopped":
             style = "cyan" if focused else "dim"
-            subtitle = "stopped"
+            subtitle = f"stopped | {tmux_id}"
             indicator = ""
         elif state == "working":
             style = "bright_cyan" if focused else "green"
-            subtitle = "WORKING"
+            subtitle = f"WORKING | {tmux_id}"
             indicator = "\u25cf "  # ●
         else:  # idle
             style = "bright_cyan" if focused else "yellow"
-            subtitle = "idle"
+            subtitle = f"idle | {tmux_id}"
             indicator = "\u25cb "  # ○
 
         body = self._last_text or "[dim](empty)[/dim]"
@@ -149,6 +155,10 @@ class SidebarItem(Static, can_focus=True):
         super().__init__(**kw)
         self.item_type = item_type  # "session", "script", "macro", "routine", "add-*"
         self.item_id = item_id      # script name or routine id
+
+    def on_click(self) -> None:
+        self.focus()
+        self.screen.action_activate_item()
 
 
 # ── Status Bar Widget ────────────────────────────────────────────────
@@ -271,6 +281,7 @@ class CreateSessionScreen(FormScreen):
         active = get_active_dashboard_id()
         db_options = [(db.get("name", did), did) for did, db in dashboards.items()]
         active_label = dashboards.get(active, {}).get("name", active)
+        session_vars = list_session_vars()
 
         with VerticalScroll(classes="modal-dialog"):
             yield Static("[bold]Create Session[/bold]", classes="form-title")
@@ -282,6 +293,14 @@ class CreateSessionScreen(FormScreen):
             yield Input(placeholder="e.g. /home/ubuntu/my-project", id="f-workdir")
             yield Label("Dashboard")
             yield Select(db_options, id="f-dashboard", prompt=active_label)
+
+            if session_vars:
+                yield Static("")
+                yield Static("[bold cyan]Session Variables[/bold cyan]", classes="form-subtitle")
+                for sv in session_vars:
+                    yield Label(sv.get("label", sv["name"]))
+                    yield Input(placeholder=sv["name"], id=f"f-sv-{sv['name']}")
+
             with Horizontal(classes="button-row"):
                 yield Button("Create", variant="primary", id="btn-create")
                 yield Button("Cancel", id="btn-cancel")
@@ -306,8 +325,19 @@ class CreateSessionScreen(FormScreen):
         db_select = self.query_one("#f-dashboard", Select)
         dashboard_id = db_select.value if db_select.value is not Select.BLANK else None
 
+        # Collect session var values
+        vars_dict = {}
+        for sv in list_session_vars():
+            try:
+                val = self.query_one(f"#f-sv-{sv['name']}", Input).value
+                if val:
+                    vars_dict[sv["name"]] = val
+            except NoMatches:
+                pass
+
         try:
-            create_session(session_id, name=name, working_dir=workdir, dashboard_id=dashboard_id)
+            create_session(session_id, name=name, working_dir=workdir,
+                           dashboard_id=dashboard_id, vars=vars_dict or None)
             self.notify(f"Session '{session_id}' created")
             self.dismiss(True)
         except Exception as e:
@@ -323,7 +353,6 @@ class EditSessionScreen(FormScreen):
     def __init__(self, session_id: str):
         super().__init__()
         self.session_id = session_id
-        self._var_counter = 0
 
     def compose(self) -> ComposeResult:
         s = get_session(self.session_id)
@@ -335,6 +364,8 @@ class EditSessionScreen(FormScreen):
         current_db = get_session_dashboard(self.session_id)
         db_options = [(db.get("name", did), did) for did, db in dashboards.items()]
         current_label = dashboards.get(current_db, {}).get("name", current_db) if current_db else "None"
+        session_vars = list_session_vars()
+        existing_vars = s.get("vars", {})
 
         with VerticalScroll(classes="modal-dialog"):
             yield Static(f"[bold]Edit: {self.session_id}[/bold]", classes="form-title")
@@ -345,63 +376,27 @@ class EditSessionScreen(FormScreen):
             yield Label("Dashboard")
             yield Select(db_options, id="f-dashboard", prompt=current_label)
 
-            yield Static("")
-            yield Static("[bold cyan]Session Variables[/bold cyan]", classes="form-subtitle")
-            yield Vertical(id="vars-container")
-            yield Button("+ Add Variable", id="btn-add-var", classes="add-var-btn")
+            if session_vars:
+                yield Static("")
+                yield Static("[bold cyan]Session Variables[/bold cyan]", classes="form-subtitle")
+                for sv in session_vars:
+                    var_name = sv["name"]
+                    yield Label(sv.get("label", var_name))
+                    yield Input(
+                        value=existing_vars.get(var_name, ""),
+                        placeholder=var_name,
+                        id=f"f-sv-{var_name}",
+                    )
 
             with Horizontal(classes="button-row"):
                 yield Button("Save", variant="primary", id="btn-save")
                 yield Button("Cancel", id="btn-cancel")
 
-    def on_mount(self) -> None:
-        s = get_session(self.session_id)
-        if not s:
-            return
-        existing_vars = s.get("vars", {})
-        for var_name, var_value in existing_vars.items():
-            self._add_var_row(var_name, str(var_value))
-
-    def _add_var_row(self, name: str = "", value: str = "") -> None:
-        self._var_counter += 1
-        idx = self._var_counter
-        row = Horizontal(
-            Input(value=name, placeholder="Variable name", id=f"var-name-{idx}", classes="var-name-input"),
-            Input(value=value, placeholder="Value", id=f"var-val-{idx}", classes="var-val-input"),
-            Button("x", id=f"var-del-{idx}", classes="var-del-btn"),
-            id=f"var-row-{idx}",
-            classes="var-row",
-        )
-        self.query_one("#vars-container").mount(row)
-
     def on_button_pressed(self, event: Button.Pressed) -> None:
-        btn_id = event.button.id
-        if btn_id == "btn-save":
+        if event.button.id == "btn-save":
             self._do_save()
-        elif btn_id == "btn-add-var":
-            self._add_var_row()
-        elif btn_id and btn_id.startswith("var-del-"):
-            idx = btn_id.replace("var-del-", "")
-            try:
-                row = self.query_one(f"#var-row-{idx}")
-                row.remove()
-            except NoMatches:
-                pass
-        elif btn_id == "btn-cancel":
+        elif event.button.id == "btn-cancel":
             self.dismiss(None)
-
-    def _collect_vars(self) -> dict:
-        """Collect all variable name/value pairs from the form."""
-        variables = {}
-        for row in self.query(".var-row"):
-            name_inputs = row.query("Input.var-name-input")
-            val_inputs = row.query("Input.var-val-input")
-            if name_inputs and val_inputs:
-                var_name = name_inputs.first().value.strip()
-                var_value = val_inputs.first().value
-                if var_name:
-                    variables[var_name] = var_value
-        return variables
 
     def _do_save(self) -> None:
         s = get_session(self.session_id)
@@ -418,7 +413,15 @@ class EditSessionScreen(FormScreen):
         if workdir != s.get("working_dir"):
             updates["working_dir"] = workdir
 
-        new_vars = self._collect_vars()
+        # Collect session var values
+        new_vars = {}
+        for sv in list_session_vars():
+            try:
+                val = self.query_one(f"#f-sv-{sv['name']}", Input).value
+                if val:
+                    new_vars[sv["name"]] = val
+            except NoMatches:
+                pass
         if new_vars != s.get("vars", {}):
             updates["vars"] = new_vars
 
@@ -658,9 +661,11 @@ class CreateRoutineScreen(FormScreen):
             with Horizontal(classes="switch-row"):
                 yield Label("Enabled", classes="switch-label")
                 yield Switch(value=True, id="f-enabled")
-            with Horizontal(classes="switch-row"):
-                yield Label("Only when session is idle", classes="switch-label")
-                yield Switch(value=True, id="f-idle-only")
+            yield Label("Send when")
+            yield Select(
+                [("Always", "always"), ("Session idle", "idle"), ("Claude Code ready", "claude_ready")],
+                id="f-send-when", prompt="Session idle",
+            )
             yield Label("Only when process is running (optional)")
             yield Input(placeholder="e.g. claude", id="f-run-when-process")
             with Horizontal(classes="button-row"):
@@ -712,13 +717,14 @@ class CreateRoutineScreen(FormScreen):
             return
 
         enabled = self.query_one("#f-enabled", Switch).value
-        idle_only = self.query_one("#f-idle-only", Switch).value
+        send_when_select = self.query_one("#f-send-when", Select)
+        send_when = send_when_select.value if send_when_select.value is not Select.BLANK else "idle"
         run_when_process = self.query_one("#f-run-when-process", Input).value.strip()
 
         try:
             create_routine(routine_id, name, script=script_name, macro=macro_id,
                            session=target, interval_seconds=interval,
-                           enabled=enabled, idle_only=idle_only,
+                           enabled=enabled, send_when=send_when,
                            run_when_process=run_when_process)
             self.notify(f"Routine '{routine_id}' created")
             self.dismiss(True)
@@ -778,9 +784,13 @@ class EditRoutineScreen(FormScreen):
             with Horizontal(classes="switch-row"):
                 yield Label("Enabled", classes="switch-label")
                 yield Switch(value=r.get("enabled", False), id="f-enabled")
-            with Horizontal(classes="switch-row"):
-                yield Label("Only when session is idle", classes="switch-label")
-                yield Switch(value=r.get("idle_only", True), id="f-idle-only")
+            yield Label("Send when")
+            current_sw = r.get("send_when", "idle")
+            sw_labels = {"always": "Always", "idle": "Session idle", "claude_ready": "Claude Code ready"}
+            yield Select(
+                [("Always", "always"), ("Session idle", "idle"), ("Claude Code ready", "claude_ready")],
+                id="f-send-when", prompt=sw_labels.get(current_sw, "Session idle"),
+            )
             yield Label("Only when process is running (optional)")
             yield Input(value=r.get("run_when_process", ""), id="f-run-when-process")
             with Horizontal(classes="button-row"):
@@ -830,7 +840,9 @@ class EditRoutineScreen(FormScreen):
             pass
 
         updates["enabled"] = self.query_one("#f-enabled", Switch).value
-        updates["idle_only"] = self.query_one("#f-idle-only", Switch).value
+        send_when_select = self.query_one("#f-send-when", Select)
+        if send_when_select.value is not Select.BLANK:
+            updates["send_when"] = send_when_select.value
         updates["run_when_process"] = self.query_one("#f-run-when-process", Input).value.strip()
 
         if updates:
@@ -868,6 +880,7 @@ class CreateMacroScreen(FormScreen):
     BINDINGS = [Binding("escape", "cancel", "Cancel")]
 
     def compose(self) -> ComposeResult:
+        session_vars = list_session_vars()
         with VerticalScroll(classes="modal-dialog"):
             yield Static("[bold]Create Macro[/bold]", classes="form-title")
             yield Label("Macro ID")
@@ -876,9 +889,17 @@ class CreateMacroScreen(FormScreen):
             yield Input(placeholder="e.g. Start Dev Server", id="f-name")
             yield Label("Keys to send [dim](multi-line: auto-inserts \\\\)[/dim]")
             yield TextArea("", id="f-keys", classes="macro-editor")
+            if session_vars:
+                var_names = ", ".join(f"[cyan]${sv['name']}[/cyan]" for sv in session_vars)
+                yield Static(f"[dim]Available vars: {var_names}[/dim]", classes="form-hint")
             with Horizontal(classes="switch-row"):
                 yield Label("Send Enter upon completion", classes="switch-label")
                 yield Switch(value=True, id="f-enter")
+            yield Label("Send when")
+            yield Select(
+                [("Always", "always"), ("Session idle", "idle"), ("Claude Code ready", "claude_ready")],
+                id="f-send-when", prompt="Always",
+            )
             with Horizontal(classes="button-row"):
                 yield Button("Create", variant="primary", id="btn-create")
                 yield Button("Cancel", id="btn-cancel")
@@ -901,8 +922,10 @@ class CreateMacroScreen(FormScreen):
             return
         keys = _add_bash_continuation(raw)
         send_enter = self.query_one("#f-enter", Switch).value
+        send_when_select = self.query_one("#f-send-when", Select)
+        send_when = send_when_select.value if send_when_select.value is not Select.BLANK else "always"
         try:
-            create_macro(macro_id, name, keys, enter=send_enter)
+            create_macro(macro_id, name, keys, enter=send_enter, send_when=send_when)
             self.notify(f"Macro '{macro_id}' created")
             self.dismiss(True)
         except Exception as e:
@@ -925,24 +948,46 @@ class EditMacroScreen(FormScreen):
             yield Static(f"Macro '{self.macro_id}' not found")
             return
 
+        session_vars = list_session_vars()
         with VerticalScroll(classes="modal-dialog"):
             yield Static(f"[bold]Edit: {self.macro_id}[/bold]", classes="form-title")
             yield Label("Name")
             yield Input(value=m.get("name", ""), id="f-name")
             yield Label("Keys to send [dim](multi-line: auto-inserts \\\\)[/dim]")
             yield TextArea(m.get("keys", ""), id="f-keys", classes="macro-editor")
+            if session_vars:
+                var_names = ", ".join(f"[cyan]${sv['name']}[/cyan]" for sv in session_vars)
+                yield Static(f"[dim]Available vars: {var_names}[/dim]", classes="form-hint")
             with Horizontal(classes="switch-row"):
                 yield Label("Send Enter upon completion", classes="switch-label")
                 yield Switch(value=m.get("enter", True), id="f-enter")
+            yield Label("Send when")
+            current_sw = m.get("send_when", "always")
+            sw_labels = {"always": "Always", "idle": "Session idle", "claude_ready": "Claude Code ready"}
+            yield Select(
+                [("Always", "always"), ("Session idle", "idle"), ("Claude Code ready", "claude_ready")],
+                id="f-send-when", prompt=sw_labels.get(current_sw, "Always"),
+            )
             with Horizontal(classes="button-row"):
                 yield Button("Save", variant="primary", id="btn-save")
+                yield Button("Delete", variant="error", id="btn-delete")
                 yield Button("Cancel", id="btn-cancel")
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "btn-save":
             self._do_save()
+        elif event.button.id == "btn-delete":
+            self._do_delete()
         else:
             self.dismiss(None)
+
+    def _do_delete(self) -> None:
+        try:
+            delete_macro(self.macro_id)
+            self.notify(f"Deleted macro '{self.macro_id}'")
+            self.dismiss(True)
+        except Exception as e:
+            self.notify(f"Error: {e}", severity="error")
 
     def _do_save(self) -> None:
         updates = {}
@@ -953,6 +998,9 @@ class EditMacroScreen(FormScreen):
         if raw.strip():
             updates["keys"] = _add_bash_continuation(raw)
         updates["enter"] = self.query_one("#f-enter", Switch).value
+        send_when_select = self.query_one("#f-send-when", Select)
+        if send_when_select.value is not Select.BLANK:
+            updates["send_when"] = send_when_select.value
         if updates:
             try:
                 update_macro(self.macro_id, **updates)
@@ -1059,6 +1107,76 @@ class EditDashboardScreen(FormScreen):
             self.dismiss("deleted")
         except Exception as e:
             self.notify(f"Error: {e}", severity="error")
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+
+class SessionVarsScreen(FormScreen):
+    """Manage global session variable definitions."""
+    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+
+    def __init__(self):
+        super().__init__()
+        self._var_counter = 0
+
+    def compose(self) -> ComposeResult:
+        with VerticalScroll(classes="modal-dialog"):
+            yield Static("[bold]Session Variables[/bold]", classes="form-title")
+            yield Static("Define variables available on all sessions.\nUse [cyan]$var_name[/cyan] in macros for substitution.", classes="form-help")
+            yield Vertical(id="sv-list")
+            yield Button("+ Add Variable", id="btn-add-sv", classes="add-var-btn")
+            with Horizontal(classes="button-row"):
+                yield Button("Save", variant="primary", id="btn-save")
+                yield Button("Cancel", id="btn-cancel")
+
+    def on_mount(self) -> None:
+        for sv in list_session_vars():
+            self._add_sv_row(sv["name"], sv.get("label", ""))
+
+    def _add_sv_row(self, name: str = "", label: str = "") -> None:
+        self._var_counter += 1
+        idx = self._var_counter
+        row = Horizontal(
+            Input(value=name, placeholder="var_name", id=f"sv-name-{idx}", classes="var-name-input"),
+            Input(value=label, placeholder="Display Label", id=f"sv-label-{idx}", classes="var-val-input"),
+            Button("x", variant="error", id=f"sv-del-{idx}", classes="var-del-btn"),
+            id=f"sv-row-{idx}",
+            classes="var-row",
+        )
+        self.query_one("#sv-list").mount(row)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        btn_id = event.button.id
+        if btn_id == "btn-save":
+            self._do_save()
+        elif btn_id == "btn-add-sv":
+            self._add_sv_row()
+        elif btn_id and btn_id.startswith("sv-del-"):
+            idx = btn_id.replace("sv-del-", "")
+            try:
+                self.query_one(f"#sv-row-{idx}").remove()
+            except NoMatches:
+                pass
+        elif btn_id == "btn-cancel":
+            self.dismiss(None)
+
+    def _do_save(self) -> None:
+        from core.config import load_config, save_config
+        config = load_config()
+        new_vars = []
+        for row in self.query(".var-row"):
+            name_inputs = row.query("Input.var-name-input")
+            label_inputs = row.query("Input.var-val-input")
+            if name_inputs and label_inputs:
+                var_name = name_inputs.first().value.strip()
+                var_label = label_inputs.first().value.strip()
+                if var_name:
+                    new_vars.append({"name": var_name, "label": var_label or var_name})
+        config["session_vars"] = new_vars
+        save_config(config)
+        self.notify(f"Saved {len(new_vars)} session variable(s)")
+        self.dismiss(True)
 
     def action_cancel(self) -> None:
         self.dismiss(None)
@@ -1240,6 +1358,10 @@ class MainScreen(Screen):
         add_session = SidebarItem("add-session", None, id="sb-add-session", classes="sidebar-item sidebar-add")
         add_session.update("  [green]+ Session[/green]")
         container.mount(add_session)
+
+        sv_item = SidebarItem("session-vars", None, id="sb-session-vars", classes="sidebar-item sidebar-add")
+        sv_item.update("  [dim]Session Vars[/dim]")
+        container.mount(sv_item)
 
         # Scripts header
         container.mount(Static(""))
@@ -1627,8 +1749,10 @@ class MainScreen(Screen):
         if not is_running(sid):
             self.notify(f"'{sid}' is not running", severity="warning")
             return
+        self.app.interactive_sessions.add(sid)
         with self.app.suspend():
             enter_session(sid)
+        self.app.interactive_sessions.discard(sid)
         self._build_panels()
 
     def action_send_message(self) -> None:
@@ -1737,6 +1861,7 @@ class MainScreen(Screen):
 
     def _send_macro(self, macro_id: str, session_id: str | None = None) -> None:
         """Send a macro's keys to a session."""
+        from core.tmux_manager import claude_ready as _claude_ready
         m = get_macro(macro_id)
         if not m:
             self.notify(f"Macro '{macro_id}' not found", severity="error")
@@ -1748,7 +1873,22 @@ class MainScreen(Screen):
         if not is_running(sid):
             self.notify(f"'{sid}' is not running", severity="warning")
             return
-        keys = m["keys"]
+        # Check send_when condition
+        send_when = m.get("send_when", "always")
+        if send_when == "idle":
+            try:
+                panel = self.query_one(f"#panel-{sid}", SessionPanel)
+                if panel._activity_state() == "working":
+                    self.notify(f"'{sid}' is not idle — macro skipped", severity="warning")
+                    return
+            except NoMatches:
+                pass
+        elif send_when == "claude_ready":
+            check = _claude_ready(sid)
+            if not check["ready"]:
+                self.notify(f"Claude not ready ({check['reason']}) — macro skipped", severity="warning")
+                return
+        keys = substitute_vars(m["keys"], sid)
         do_enter = m.get("enter", True)
         if "\n" in keys:
             # Multi-line: paste as block so newlines stay as-is
@@ -1855,6 +1995,8 @@ class MainScreen(Screen):
                 self._switch_dashboard(focused.item_id)
             elif focused.item_type == "add-dashboard":
                 self.app.push_screen(CreateDashboardScreen(), callback=self._on_dashboard_form_done)
+            elif focused.item_type == "session-vars":
+                self.app.push_screen(SessionVarsScreen(), callback=self._on_form_done)
             elif focused.item_type == "add-session":
                 self.action_new_session()
             elif focused.item_type == "add-script":
@@ -2252,6 +2394,18 @@ class TinyAgenticApp(App):
         height: auto;
     }
 
+    .form-help {
+        height: auto;
+        padding: 0 0;
+        margin-bottom: 1;
+    }
+
+    .form-hint {
+        height: auto;
+        padding: 0 0;
+        margin-top: 0;
+    }
+
     #vars-container {
         height: auto;
         max-height: 20;
@@ -2328,8 +2482,10 @@ class TinyAgenticApp(App):
 
     def __init__(self):
         super().__init__()
+        self.interactive_sessions: set[str] = set()
         self.routines_daemon = RoutinesDaemon()
         self.routines_daemon.idle_checker = self._check_session_idle
+        self.routines_daemon.interactive_checker = self._check_session_interactive
 
     def _check_session_idle(self, session_id: str) -> bool:
         """Called by the daemon thread to check if a session panel is idle."""
@@ -2338,6 +2494,10 @@ class TinyAgenticApp(App):
             return screen._idle_states.get(session_id, True)
         except Exception:
             return True
+
+    def _check_session_interactive(self, session_id: str) -> bool:
+        """Called by the daemon thread to check if user is attached to this session."""
+        return session_id in self.interactive_sessions
 
     def on_mount(self) -> None:
         load_config()

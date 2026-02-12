@@ -3,16 +3,19 @@
 from .config import load_config, save_config
 
 
-def create_session(session_id, name=None, working_dir=None, dashboard_id=None):
+def create_session(session_id, name=None, working_dir=None, dashboard_id=None, vars=None):
     config = load_config()
 
     if session_id in config["sessions"]:
         raise ValueError(f"Session '{session_id}' already exists")
 
-    config["sessions"][session_id] = {
+    session = {
         "name": name or session_id.replace("-", " ").title(),
         "working_dir": working_dir,
     }
+    if vars:
+        session["vars"] = vars
+    config["sessions"][session_id] = session
     # Add to the specified or active dashboard
     target_db = dashboard_id or config.get("active_dashboard", "main")
     dashboards = config.get("dashboards", {})

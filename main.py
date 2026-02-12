@@ -2,6 +2,7 @@
 """TinyAgentic.ai — Tmux Session Manager (Textual TUI)"""
 
 import os
+import re
 import time
 from functools import partial
 
@@ -73,11 +74,87 @@ from core.routines import (
 # ── Widgets ──────────────────────────────────────────────────────────
 
 
-IDLE_THRESHOLD = 30.0  # seconds without output change → idle
+IDLE_THRESHOLD = 30.0  # seconds without output change → idle fallback
 PANEL_HEIGHT_DEFAULT = 24
 PANEL_HEIGHT_STEP = 4
 PANEL_HEIGHT_MIN = 8
 PANEL_HEIGHT_MAX = 60
+
+# Claude Code health states (priority order — first match wins)
+_WORKING_INDICATORS = [
+    "Running", "esc to interrupt", "Fetching", "Coalescing",
+    "Churning", "Baking", "Mustering", "Crunching", "Cooking",
+    "Cogitating", "Fluorescing", "Spelunking",
+]
+_THINKING_INDICATORS = ["thought for", "Thinking", "Deliberating"]
+
+
+def _parse_claude_health(text: str) -> str:
+    """Derive a Claude Code health state from the last non-empty pane lines.
+
+    Returns one of: working, thinking, waiting, typed, idle, low_ctx, zero_ctx.
+    Returns empty string if no Claude-specific state could be determined.
+    """
+    lines = text.split("\n")
+    tail = [l for l in lines if l.strip()][-6:]
+    if not tail:
+        return ""
+    bottom = "\n".join(tail)
+
+    # 0% context — needs restart
+    if "Context left until auto-compact: 0%" in bottom and "? for shortcuts" in bottom:
+        return "zero_ctx"
+
+    # Low context (<15%)
+    ctx_match = re.search(r"Context left until auto-compact:\s*(\d+)%", bottom)
+    if ctx_match and int(ctx_match.group(1)) < 15 and "? for shortcuts" in bottom:
+        return "low_ctx"
+
+    # Working — actively running a tool / streaming output
+    if any(ind in bottom for ind in _WORKING_INDICATORS):
+        return "working"
+
+    # Thinking — model is deliberating
+    if any(ind in bottom for ind in _THINKING_INDICATORS):
+        return "thinking"
+
+    # Waiting — approval prompt or interactive selection
+    if (
+        "Esc to cancel" in bottom
+        or "Do you want to proceed?" in bottom
+        or "Do you want to allow" in bottom
+        or ("\u276f" in bottom and "(esc)" in bottom)
+        or ("\u276f" in bottom and "ctrl-g to edit" in bottom)
+    ):
+        return "waiting"
+
+    # Typed — unsubmitted text sitting in the prompt
+    if "? for shortcuts" in bottom or "accept edits on" in bottom or "\u276f" in bottom:
+        for line in tail:
+            if "\u276f" in line:
+                after = line.split("\u276f", 1)[1].strip()
+                if after:
+                    return "typed"
+                break
+
+    # Idle — empty prompt visible
+    if "? for shortcuts" in bottom:
+        return "idle"
+
+    return ""
+
+
+# State → (label, indicator, normal_style, focused_style)
+_HEALTH_STYLES = {
+    "working":  ("WORKING",  "\u25cf ", "green",      "bright_cyan"),
+    "thinking": ("THINKING", "\u25cf ", "bright_blue", "bright_cyan"),
+    "waiting":  ("WAITING",  "\u26a0 ", "bright_red",  "bright_cyan"),
+    "typed":    ("TYPED",    "\u270e ", "magenta",     "bright_cyan"),
+    "idle":     ("idle",     "\u25cb ", "yellow",      "bright_cyan"),
+    "low_ctx":  ("LOW CTX",  "\u25cb ", "bright_yellow","bright_cyan"),
+    "zero_ctx": ("0% CTX",   "\u2717 ", "red",         "bright_cyan"),
+    "stopped":  ("stopped",  "",        "dim",         "cyan"),
+}
 
 
 class SessionPanel(Static, can_focus=True):
@@ -96,9 +173,18 @@ class SessionPanel(Static, can_focus=True):
         self._last_changed_at = time.monotonic() - IDLE_THRESHOLD
 
     def _activity_state(self) -> str:
-        """Return 'working', 'idle', or 'stopped'."""
+        """Return a Claude-aware health state string.
+
+        States: working, thinking, waiting, typed, idle, low_ctx, zero_ctx, stopped.
+        Falls back to the legacy 30s timer when no Claude state is detected.
+        """
         if not self._running:
             return "stopped"
+        # Try Claude-aware parsing on the last non-empty lines
+        health = _parse_claude_health(self._last_text)
+        if health:
+            return health
+        # Fallback: simple timer-based detection
         elapsed = time.monotonic() - self._last_changed_at
         return "idle" if elapsed >= IDLE_THRESHOLD else "working"
 
@@ -115,19 +201,11 @@ class SessionPanel(Static, can_focus=True):
         focused = self.has_focus
 
         tmux_id = f"tmux: {self._tmux_name}"
-
-        if state == "stopped":
-            style = "cyan" if focused else "dim"
-            subtitle = f"stopped | {tmux_id}"
-            indicator = ""
-        elif state == "working":
-            style = "bright_cyan" if focused else "green"
-            subtitle = f"WORKING | {tmux_id}"
-            indicator = "\u25cf "  # ●
-        else:  # idle
-            style = "bright_cyan" if focused else "yellow"
-            subtitle = f"idle | {tmux_id}"
-            indicator = "\u25cb "  # ○
+        label, indicator, normal_style, focused_style = _HEALTH_STYLES.get(
+            state, ("unknown", "? ", "dim", "cyan"),
+        )
+        style = focused_style if focused else normal_style
+        subtitle = f"{label} | {tmux_id}"
 
         body = self._last_text or "[dim](empty)[/dim]"
 
@@ -1569,7 +1647,7 @@ class MainScreen(Screen):
                     thread=True,
                     group="panel-capture",
                 )
-                self._idle_states[sid] = panel._activity_state() == "idle"
+                self._idle_states[sid] = panel._activity_state() not in ("working", "thinking")
             else:
                 panel.update_content("[dim]not running[/dim]", running=False)
                 self._idle_states[sid] = True

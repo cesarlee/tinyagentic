@@ -1,6 +1,6 @@
 # TinyAgentic.ai
 
-A terminal UI for managing fleets of AI agents running in tmux sessions. Built with [Textual](https://textual.textualize.io/), designed for orchestrating [Claude Code](https://docs.anthropic.com/en/docs/claude-code) instances and similar AI coding agents at scale.
+A terminal UI and web dashboard for managing fleets of AI agents running in tmux sessions. Built with [Textual](https://textual.textualize.io/) and [FastAPI](https://fastapi.tiangolo.com/), designed for orchestrating [Claude Code](https://docs.anthropic.com/en/docs/claude-code) instances and similar AI coding agents at scale.
 
 ![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
@@ -29,12 +29,16 @@ TinyAgentic.ai gives you a dashboard to spawn, monitor, and automate multiple AI
 git clone https://github.com/cesarlee/tinyagentic.git
 cd tinyagentic
 
-pip install textual python-dotenv rich
+pip install textual python-dotenv rich fastapi uvicorn websockets
 
 # Optional: add your Anthropic API key for AI-powered features
 echo "ANTHROPIC_API_KEY=sk-ant-..." > .env
 
+# Terminal UI
 python main.py
+
+# Web UI (serves at http://localhost:8000)
+python api.py
 ```
 
 ## How it works
@@ -87,6 +91,36 @@ python main.py
 | `Enter` | Activate sidebar item |
 | `1`-`9` | Switch dashboard |
 | `q` | Quit |
+
+## Web UI
+
+Run `python api.py` and open `http://localhost:8000` in your browser. The web UI mirrors the TUI with:
+
+- **Sidebar** — Dashboards, sessions (with running status dots), session vars, scripts, macros, routines (with live countdowns), daemon toggle
+- **Dashboard panel grid** — 2-column grid showing live terminal output and health badges for each session
+- **Monitor view** — Click a panel to expand it with full output, a command input bar, quick-send keys (Enter, Ctrl+C, Tab, Esc, arrows), and a macro sender
+- **Attach command** — Each monitor view shows a copyable `tmux attach` command so you can jump into any session in your local terminal for full interactivity
+- **CRUD modals** — Create/edit sessions, dashboards, macros, routines, scripts, and session variables from the browser
+- **Live updates** — WebSocket connections stream terminal output and session state in real time
+
+### REST API
+
+All operations are available via REST endpoints at `http://localhost:8000`:
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/sessions` | List all sessions with health status |
+| `POST` | `/sessions` | Create a session |
+| `POST` | `/sessions/{id}/start` | Start a session's tmux terminal |
+| `POST` | `/sessions/{id}/stop` | Stop a session |
+| `POST` | `/sessions/{id}/send-keys` | Send text to a session |
+| `POST` | `/sessions/{id}/send-special-key` | Send a key like Enter, Ctrl+C, Tab |
+| `GET` | `/sessions/{id}/capture` | Capture terminal output |
+| `GET` | `/sessions/{id}/claude-ready` | Check Claude Code readiness |
+| `GET/POST/PATCH/DELETE` | `/dashboards`, `/macros`, `/routines`, `/scripts`, `/session-vars` | Full CRUD |
+| `GET/POST` | `/daemon/status`, `/daemon/start`, `/daemon/stop` | Manage routines daemon |
+| `WS` | `/ws/terminal/{id}` | Stream terminal output |
+| `WS` | `/ws/state` | Stream sidebar state (health, countdowns, daemon) |
 
 ## Features
 
@@ -172,6 +206,7 @@ This powers the `Claude Code ready` option on macros and routines.
 ```
 tinyagentic.ai/
 ├── main.py                  # TUI application (Textual)
+├── api.py                   # Web API server (FastAPI + WebSocket)
 ├── .env                     # API keys (gitignored)
 ├── config.json              # All configuration (gitignored)
 ├── core/
@@ -183,6 +218,8 @@ tinyagentic.ai/
 │   ├── scripts.py           # Script library + dynamic execution
 │   ├── session_vars.py      # Session variable definitions
 │   └── tmux_manager.py      # Tmux operations + Claude readiness
+├── web/
+│   └── index.html           # Web dashboard (single-file, no build step)
 └── scripts/
     ├── approval-watcher.py  # Auto-approve Claude prompts
     └── check-chat.py        # Prompt agents to check chat
@@ -236,9 +273,12 @@ All state lives in `config.json` (created automatically on first run). It's inte
 
 ## Architecture notes
 
+- **Two interfaces, shared core** — Both the TUI (`main.py`) and web UI (`api.py`) use the same `core/` modules. Run either or both; they share `config.json`
 - **Thread-safe config** — Reads and writes are mutex-locked; writes use atomic temp-file + rename to prevent corruption from concurrent access
-- **Background workers** — Panel capture, session start, and script execution run in Textual worker threads to keep the UI responsive
+- **Background workers** — Panel capture, session start, and script execution run in Textual worker threads (TUI) or asyncio tasks (API) to keep both UIs responsive
+- **WebSocket streaming** — The web UI uses `/ws/terminal/{id}` for live output (500ms) and `/ws/state` for sidebar state (2s) without polling from the client
 - **No polling waste** — Routines daemon sleeps in 1-second increments for responsive shutdown; panel capture refreshes every 3 seconds
 - **Dynamic script loading** — Scripts are loaded via `importlib` with clean module isolation (no `sys.modules` pollution)
-- **Config as interface** — `config.json` is designed to be readable and writable by both the TUI and by the agents themselves
+- **Config as interface** — `config.json` is designed to be readable and writable by both UIs and by the agents themselves
+- **Single-file frontend** — `web/index.html` is vanilla JS with inline CSS, no build step. Served directly by FastAPI on the same origin
 

@@ -424,7 +424,7 @@ function enterTerminal(sid) {
   if (!terminalWs[sid]) connectTerminalWs(sid);
   // Request more lines for terminal view
   if (terminalWs[sid]?.readyState === 1) {
-    terminalWs[sid].send(JSON.stringify({type:'resize', lines:60}));
+    terminalWs[sid].send(JSON.stringify({type:'resize', lines:120}));
   }
 }
 
@@ -751,17 +751,45 @@ async function doEditMacro(mid) { try { await PATCH(`/macros/${mid}`,{name:gv('m
 async function doDeleteMacro(mid) { if(!confirm(`Delete macro '${mid}'?`)) return; try { await DEL(`/macros/${mid}`); closeModal(); status('Macro deleted','var(--yellow)'); await loadAll(); } catch(e) { status('Error: '+e.message,'var(--red)'); } }
 
 // Create/Edit Routine
+function sessionCheckboxes(selected) {
+  // selected is a string: "*" or "sid1,sid2,..."
+  const selectedSet = selected === '*' ? new Set(['*']) : new Set(selected.split(',').map(s=>s.trim()).filter(Boolean));
+  const allChecked = selectedSet.has('*');
+  let h = `<div style="max-height:140px;overflow-y:auto;border:1px solid var(--bg3);border-radius:4px;padding:6px;">`;
+  h += `<label style="display:flex;align-items:center;gap:6px;margin-bottom:4px;cursor:pointer"><input type="checkbox" class="sess-cb" value="*" ${allChecked?'checked':''} onchange="toggleAllSessions(this)" style="width:auto"/>* (all sessions)</label>`;
+  for (const [id, s] of Object.entries(state.sessions)) {
+    const checked = allChecked || selectedSet.has(id) ? 'checked' : '';
+    h += `<label style="display:flex;align-items:center;gap:6px;margin-bottom:2px;cursor:pointer"><input type="checkbox" class="sess-cb" value="${id}" ${checked} onchange="uncheckAllIfIndividual(this)" style="width:auto"/>${esc(s.name||id)}</label>`;
+  }
+  h += `</div>`;
+  return h;
+}
+
+function toggleAllSessions(el) {
+  const cbs = document.querySelectorAll('.sess-cb');
+  for (const cb of cbs) { if (cb.value !== '*') cb.checked = el.checked; }
+}
+function uncheckAllIfIndividual(el) {
+  const allCb = document.querySelector('.sess-cb[value="*"]');
+  if (allCb) allCb.checked = false;
+}
+function getSelectedSessions() {
+  const allCb = document.querySelector('.sess-cb[value="*"]');
+  if (allCb?.checked) return '*';
+  const checked = [...document.querySelectorAll('.sess-cb:checked')].map(cb=>cb.value).filter(v=>v!=='*');
+  return checked.join(',') || '*';
+}
+
 function modalCreateRoutine() {
   const scriptOpts = state.scripts.map(s=>`<option value="${s}">${s}</option>`).join('');
   const macroOpts = Object.entries(state.macros).map(([id,m])=>`<option value="${id}">${esc(m.name||id)}</option>`).join('');
-  const sessionOpts = `<option value="*">* (all sessions)</option>` + Object.entries(state.sessions).map(([id,s])=>`<option value="${id}">${esc(s.name||id)}</option>`).join('');
   showModal(`<h2>Create Routine</h2>
     <div class="field"><label>Routine ID</label><input id="m-id" placeholder="e.g. auto-approve"/></div>
     <div class="field"><label>Name</label><input id="m-name" placeholder="e.g. Auto Approve"/></div>
     <div class="field"><label>Type</label><select id="m-type"><option value="script">Script</option><option value="macro">Macro</option></select></div>
     <div class="field"><label>Script</label><select id="m-script"><option value="">Select...</option>${scriptOpts}</select></div>
     <div class="field"><label>Macro</label><select id="m-macro"><option value="">Select...</option>${macroOpts}</select></div>
-    <div class="field"><label>Target Session</label><select id="m-session">${sessionOpts}</select></div>
+    <div class="field"><label>Target Sessions</label>${sessionCheckboxes('*')}</div>
     <div class="field"><label>Interval (seconds)</label><input id="m-interval" type="number" value="30"/></div>
     <div class="field"><label>Send when</label><select id="m-sendwhen"><option value="idle">Session idle</option><option value="always">Always</option><option value="claude_ready">Claude Code ready</option></select></div>
     <div class="field"><label>Run when process (optional)</label><input id="m-process" placeholder="e.g. claude"/></div>
@@ -772,7 +800,7 @@ async function doCreateRoutine() {
   const type = gv('m-type');
   try {
     await POST('/routines',{ id:gv('m-id'), name:gv('m-name'), script:type==='script'?gv('m-script'):null, macro:type==='macro'?gv('m-macro'):null,
-      session:gv('m-session'), interval_seconds:parseInt(gv('m-interval'))||30, enabled:document.getElementById('m-enabled').checked,
+      session:getSelectedSessions(), interval_seconds:parseInt(gv('m-interval'))||30, enabled:document.getElementById('m-enabled').checked,
       send_when:gv('m-sendwhen'), run_when_process:gv('m-process') });
     closeModal(); status('Routine created','var(--green)'); await loadAll();
   } catch(e) { status('Error: '+e.message,'var(--red)'); }
@@ -782,13 +810,12 @@ async function modalEditRoutine(rid) {
   const r = state.routines[rid]; if(!r) return;
   const scriptOpts = state.scripts.map(s=>`<option value="${s}"${r.script===s?' selected':''}>${s}</option>`).join('');
   const macroOpts = Object.entries(state.macros).map(([id,m])=>`<option value="${id}"${r.macro===id?' selected':''}>${esc(m.name||id)}</option>`).join('');
-  const sessionOpts = `<option value="*"${r.session==='*'?' selected':''}>* (all sessions)</option>` + Object.entries(state.sessions).map(([id,s])=>`<option value="${id}"${r.session===id?' selected':''}>${esc(s.name||id)}</option>`).join('');
   showModal(`<h2>Edit: ${esc(rid)}</h2>
     <div class="field"><label>Name</label><input id="m-name" value="${esc(r.name||'')}"/></div>
     <div class="field"><label>Type</label><select id="m-type"><option value="script"${r.type==='script'?' selected':''}>Script</option><option value="macro"${r.type==='macro'?' selected':''}>Macro</option></select></div>
     <div class="field"><label>Script</label><select id="m-script"><option value="">Select...</option>${scriptOpts}</select></div>
     <div class="field"><label>Macro</label><select id="m-macro"><option value="">Select...</option>${macroOpts}</select></div>
-    <div class="field"><label>Target Session</label><select id="m-session">${sessionOpts}</select></div>
+    <div class="field"><label>Target Sessions</label>${sessionCheckboxes(r.session||'*')}</div>
     <div class="field"><label>Interval (seconds)</label><input id="m-interval" type="number" value="${r.interval_seconds||30}"/></div>
     <div class="field"><label>Send when</label><select id="m-sendwhen"><option value="always"${r.send_when==='always'?' selected':''}>Always</option><option value="idle"${r.send_when==='idle'?' selected':''}>Session idle</option><option value="claude_ready"${r.send_when==='claude_ready'?' selected':''}>Claude Code ready</option></select></div>
     <div class="field"><label>Run when process</label><input id="m-process" value="${esc(r.run_when_process||'')}"/></div>
@@ -799,7 +826,7 @@ async function doEditRoutine(rid) {
   const type = gv('m-type');
   try {
     await PATCH(`/routines/${rid}`,{ name:gv('m-name'), type, script:type==='script'?gv('m-script'):null, macro:type==='macro'?gv('m-macro'):null,
-      session:gv('m-session'), interval_seconds:parseInt(gv('m-interval'))||30, enabled:document.getElementById('m-enabled').checked,
+      session:getSelectedSessions(), interval_seconds:parseInt(gv('m-interval'))||30, enabled:document.getElementById('m-enabled').checked,
       send_when:gv('m-sendwhen'), run_when_process:gv('m-process') });
     closeModal(); status('Routine updated','var(--green)'); await loadAll();
   } catch(e) { status('Error: '+e.message,'var(--red)'); }

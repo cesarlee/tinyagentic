@@ -168,7 +168,9 @@ class RoutinesDaemon:
                         if is_running(sid)
                     ]
                 else:
-                    session_ids = [target_session] if is_running(target_session) else []
+                    # Support comma-separated list of session IDs
+                    targets = [s.strip() for s in target_session.split(",") if s.strip()]
+                    session_ids = [sid for sid in targets if is_running(sid)]
 
                 for sid in session_ids:
                     if not self._running:

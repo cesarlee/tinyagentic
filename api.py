@@ -353,7 +353,7 @@ def create_session_endpoint(body: SessionCreate):
 
 @app.patch("/sessions/{session_id}")
 def update_session_endpoint(session_id: str, body: SessionUpdate):
-    updates = body.model_dump(exclude_none=True)
+    updates = body.dict(exclude_none=True)
     if not updates:
         raise HTTPException(422, "No fields to update")
     try:
@@ -505,7 +505,7 @@ def create_dashboard_endpoint(body: DashboardCreate):
 
 @app.patch("/dashboards/{dashboard_id}")
 def update_dashboard_endpoint(dashboard_id: str, body: DashboardUpdate):
-    updates = body.model_dump(exclude_none=True)
+    updates = body.dict(exclude_none=True)
     if not updates:
         raise HTTPException(422, "No fields to update")
     try:
@@ -553,7 +553,7 @@ def create_macro_endpoint(body: MacroCreate):
 
 @app.patch("/macros/{macro_id}")
 def update_macro_endpoint(macro_id: str, body: MacroUpdate):
-    updates = body.model_dump(exclude_none=True)
+    updates = body.dict(exclude_none=True)
     if not updates:
         raise HTTPException(422, "No fields to update")
     try:
@@ -624,7 +624,7 @@ def create_routine_endpoint(body: RoutineCreate):
 
 @app.patch("/routines/{routine_id}")
 def update_routine_endpoint(routine_id: str, body: RoutineUpdate):
-    updates = body.model_dump(exclude_none=True)
+    updates = body.dict(exclude_none=True)
     if not updates:
         raise HTTPException(422, "No fields to update")
     try:
@@ -730,7 +730,7 @@ def create_session_var_endpoint(body: SessionVarCreate):
 
 @app.patch("/session-vars/{name}")
 def update_session_var_endpoint(name: str, body: SessionVarUpdate):
-    updates = body.model_dump(exclude_none=True)
+    updates = body.dict(exclude_none=True)
     if not updates:
         raise HTTPException(422, "No fields to update")
     try:

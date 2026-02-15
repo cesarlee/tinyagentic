@@ -1,0 +1,737 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>TinyAgentic.ai</title>
+<style>
+:root {
+  --bg: #1a1b26; --bg2: #24283b; --bg3: #2f3349;
+  --fg: #c0caf5; --fg2: #a9b1d6; --dim: #565f89;
+  --cyan: #7dcfff; --green: #9ece6a; --red: #f7768e;
+  --yellow: #e0af68; --magenta: #bb9af7; --blue: #7aa2f7;
+  --orange: #ff9e64;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body { background:var(--bg); color:var(--fg); font-family:'JetBrains Mono','Fira Code','Consolas',monospace; font-size:13px; height:100vh; overflow:hidden; }
+button { font-family:inherit; font-size:12px; cursor:pointer; border:1px solid var(--dim); background:var(--bg2); color:var(--fg); padding:4px 10px; border-radius:4px; }
+button:hover { background:var(--bg3); border-color:var(--cyan); }
+button.primary { background:var(--blue); border-color:var(--blue); color:#1a1b26; }
+button.danger { background:var(--red); border-color:var(--red); color:#1a1b26; }
+input, select, textarea { font-family:inherit; font-size:13px; background:var(--bg); color:var(--fg); border:1px solid var(--dim); border-radius:4px; padding:6px 8px; width:100%; }
+input:focus, select:focus, textarea:focus { outline:none; border-color:var(--cyan); }
+label { color:var(--fg2); font-size:12px; margin-bottom:2px; display:block; }
+
+/* Layout */
+#app { display:flex; flex-direction:column; height:100vh; }
+#header { background:var(--bg2); padding:6px 16px; border-bottom:1px solid var(--bg3); display:flex; align-items:center; justify-content:space-between; }
+#header h1 { font-size:14px; color:var(--cyan); font-weight:600; }
+#main { display:flex; flex:1; overflow:hidden; }
+#sidebar { width:220px; min-width:220px; background:var(--bg2); border-right:1px solid var(--bg3); overflow-y:auto; padding:8px 0; }
+#content { flex:1; overflow-y:auto; padding:12px; }
+#statusbar { background:var(--bg2); border-top:1px solid var(--bg3); padding:4px 16px; font-size:12px; color:var(--dim); }
+
+/* Sidebar */
+.sb-header { color:var(--cyan); font-size:11px; font-weight:700; padding:8px 12px 4px; letter-spacing:0.5px; }
+.sb-item { padding:3px 12px 3px 20px; cursor:pointer; color:var(--fg2); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.sb-item:hover { background:var(--bg3); color:var(--fg); }
+.sb-item.active { background:var(--bg3); color:var(--cyan); border-right:2px solid var(--cyan); }
+.sb-add { color:var(--green); }
+.sb-dimmed { color:var(--dim); }
+.dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:6px; vertical-align:middle; }
+.dot.running { background:var(--green); }
+.dot.stopped { background:var(--dim); }
+
+/* Panels grid */
+#panel-grid { display:grid; grid-template-columns:repeat(2,1fr); gap:10px; }
+.panel { background:var(--bg2); border:1px solid var(--bg3); border-radius:6px; overflow:hidden; cursor:pointer; }
+.panel:hover { border-color:var(--dim); }
+.panel-header { padding:6px 10px; display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid var(--bg3); }
+.panel-title { font-weight:600; font-size:12px; }
+.panel-badge { font-size:10px; padding:2px 6px; border-radius:3px; }
+.badge-working { background:var(--green); color:#1a1b26; }
+.badge-thinking { background:var(--blue); color:#1a1b26; }
+.badge-waiting { background:var(--red); color:#1a1b26; }
+.badge-idle { background:var(--yellow); color:#1a1b26; }
+.badge-typed { background:var(--magenta); color:#1a1b26; }
+.badge-low_ctx { background:var(--orange); color:#1a1b26; }
+.badge-zero_ctx { background:var(--red); color:white; }
+.badge-stopped { background:var(--bg3); color:var(--dim); }
+.panel-body { padding:8px 10px; height:280px; overflow-y:auto; white-space:pre-wrap; word-break:break-all; font-size:11px; color:var(--fg2); line-height:1.4; }
+
+/* Terminal monitor view */
+#terminal-view { display:none; flex-direction:column; height:100%; }
+#terminal-view.active { display:flex; }
+#terminal-header { padding:6px 12px; background:var(--bg2); border-bottom:1px solid var(--bg3); display:flex; justify-content:space-between; align-items:center; flex-shrink:0; }
+#terminal-toolbar { display:flex; gap:6px; padding:6px 12px; background:var(--bg2); border-bottom:1px solid var(--bg3); align-items:center; flex-shrink:0; flex-wrap:wrap; }
+#terminal-toolbar .tmux-cmd { font-size:12px; background:var(--bg); border:1px solid var(--bg3); border-radius:4px; padding:4px 10px; color:var(--cyan); font-family:inherit; cursor:pointer; user-select:all; }
+#terminal-toolbar .tmux-cmd:hover { border-color:var(--cyan); }
+.copied-toast { color:var(--green); font-size:11px; opacity:0; transition:opacity 0.3s; }
+.copied-toast.show { opacity:1; }
+#terminal-output { flex:1; padding:10px; overflow-y:auto; white-space:pre-wrap; word-break:break-all; font-size:12px; line-height:1.5; color:var(--fg); background:var(--bg); }
+#terminal-input-bar { display:flex; gap:6px; padding:6px 12px; background:var(--bg2); border-top:1px solid var(--bg3); align-items:center; flex-shrink:0; }
+#term-cmd-input { flex:1; font-size:13px; }
+#terminal-actions { display:flex; gap:6px; padding:6px 12px; background:var(--bg2); border-top:1px solid var(--bg3); align-items:center; flex-shrink:0; flex-wrap:wrap; }
+
+/* Modal */
+.modal-overlay { position:fixed; inset:0; background:rgba(0,0,0,0.6); display:flex; align-items:center; justify-content:center; z-index:100; }
+.modal { background:var(--bg2); border:1px solid var(--dim); border-radius:8px; padding:20px; min-width:400px; max-width:600px; max-height:80vh; overflow-y:auto; }
+.modal h2 { font-size:14px; color:var(--cyan); margin-bottom:12px; }
+.modal .field { margin-bottom:10px; }
+.modal .btn-row { display:flex; gap:8px; margin-top:16px; justify-content:flex-end; }
+.modal .hint { font-size:11px; color:var(--dim); margin-top:2px; }
+.var-row { display:flex; gap:6px; margin-bottom:4px; align-items:center; }
+.var-row input { flex:1; }
+.var-row button { min-width:30px; padding:4px; }
+
+/* Daemon section */
+.daemon-log { font-size:10px; color:var(--dim); padding:2px 12px 2px 20px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="header">
+    <h1>TinyAgentic.ai</h1>
+    <span id="header-info" style="color:var(--dim);font-size:12px"></span>
+  </div>
+  <div id="main">
+    <div id="sidebar"></div>
+    <div id="content">
+      <div id="panel-grid"></div>
+      <div id="terminal-view">
+        <div id="terminal-header">
+          <span id="terminal-title"></span>
+          <div style="display:flex;gap:6px;align-items:center;">
+            <span id="terminal-health" class="panel-badge badge-stopped"></span>
+            <button onclick="exitTerminal()">Back (Esc)</button>
+          </div>
+        </div>
+        <div id="terminal-toolbar">
+          <span style="color:var(--dim);font-size:11px;">In your local terminal type:</span>
+          <code class="tmux-cmd" id="tmux-attach-cmd" onclick="copyTmuxCmd()" title="Click to copy"></code>
+          <span class="copied-toast" id="copied-toast">Copied!</span>
+          <span style="flex:1"></span>
+          <button onclick="doStartFocused();" id="btn-start" style="display:none">Start</button>
+          <button onclick="doStopFocused();" id="btn-stop" style="display:none">Stop</button>
+        </div>
+        <div id="terminal-output"></div>
+        <div id="terminal-input-bar">
+          <span style="color:var(--cyan)">&#10095;</span>
+          <input id="term-cmd-input" placeholder="Type command and press Enter..." autocomplete="off" />
+          <button class="primary" onclick="sendTermCmd()">Send</button>
+        </div>
+        <div id="terminal-actions">
+          <span style="color:var(--dim);font-size:11px;">Keys:</span>
+          <button onclick="sendSpecial('Enter')">Enter</button>
+          <button onclick="sendSpecial('C-c')">Ctrl+C</button>
+          <button onclick="sendSpecial('Tab')">Tab</button>
+          <button onclick="sendSpecial('Escape')">Esc</button>
+          <button onclick="sendSpecial('Up')">Up</button>
+          <button onclick="sendSpecial('Down')">Down</button>
+          <button onclick="sendSpecial('C-l')">Clear</button>
+          <span style="flex:1"></span>
+          <button onclick="promptSendMacro()">Send Macro</button>
+        </div>
+      </div>
+    </div>
+  </div>
+  <div id="statusbar">Ready</div>
+</div>
+
+<div id="modal-root"></div>
+
+<script>
+// ── State ──
+const API = '';
+let state = { dashboards:{}, sessions:{}, macros:{}, routines:{}, scripts:[], sessionVars:[], activeDashboard:'main' };
+let currentDashboard = 'main';
+let focusedSession = null;    // session in interactive terminal mode
+let terminalWs = {};          // session_id -> WebSocket
+let stateWs = null;
+let panelContent = {};        // session_id -> last content
+
+// ── API helpers ──
+async function api(path, opts={}) {
+  const r = await fetch(API+path, { headers:{'Content-Type':'application/json'}, ...opts });
+  if (!r.ok) { const e = await r.json().catch(()=>({})); throw new Error(e.detail||r.statusText); }
+  return r.json();
+}
+const GET = p => api(p);
+const POST = (p,b) => api(p, {method:'POST', body:JSON.stringify(b)});
+const PATCH = (p,b) => api(p, {method:'PATCH', body:JSON.stringify(b)});
+const PUT = (p,b) => api(p, {method:'PUT', body:JSON.stringify(b)});
+const DEL = p => api(p, {method:'DELETE'});
+
+function status(msg, color='var(--dim)') { document.getElementById('statusbar').innerHTML = `<span style="color:${color}">${msg}</span>`; }
+
+// ── Load all data ──
+async function loadAll() {
+  try {
+    const [sessions, dashboards, macros, routines, scripts, sessionVars, active] = await Promise.all([
+      GET('/sessions'), GET('/dashboards'), GET('/macros'), GET('/routines'),
+      GET('/scripts'), GET('/session-vars'), GET('/dashboards/active'),
+    ]);
+    state = { sessions, dashboards, macros, routines, scripts, sessionVars, activeDashboard: active.id };
+    currentDashboard = active.id;
+    renderSidebar();
+    renderPanels();
+  } catch(e) { status('Failed to connect to API: '+e.message, 'var(--red)'); }
+}
+
+// ── Sidebar ──
+function renderSidebar() {
+  const sb = document.getElementById('sidebar');
+  let h = '';
+
+  // Dashboards
+  h += `<div class="sb-header">DASHBOARDS</div>`;
+  for (const [did, db] of Object.entries(state.dashboards)) {
+    const cls = did === currentDashboard ? 'sb-item active' : 'sb-item';
+    h += `<div class="${cls}" onclick="switchDashboard('${did}')">${db.name||did}</div>`;
+  }
+  h += `<div class="sb-item sb-add" onclick="modalCreateDashboard()">+ Dashboard</div>`;
+
+  // Sessions
+  h += `<div class="sb-header">SESSIONS</div>`;
+  const dbSessions = state.dashboards[currentDashboard]?.sessions || [];
+  for (const sid of dbSessions) {
+    const s = state.sessions[sid];
+    if (!s) continue;
+    const dot = s.running ? '<span class="dot running"></span>' : '<span class="dot stopped"></span>';
+    h += `<div class="sb-item" onclick="modalEditSession('${sid}')">${dot}${s.name||sid}</div>`;
+  }
+  h += `<div class="sb-item sb-add" onclick="modalCreateSession()">+ Session</div>`;
+  h += `<div class="sb-item sb-dimmed" onclick="modalSessionVars()">Session Vars</div>`;
+
+  // Scripts
+  h += `<div class="sb-header">SCRIPTS</div>`;
+  for (const name of state.scripts) {
+    h += `<div class="sb-item" onclick="modalEditScript('${name}')">${name}</div>`;
+  }
+  h += `<div class="sb-item sb-add" onclick="modalCreateScript()">+ Script</div>`;
+
+  // Macros
+  h += `<div class="sb-header">MACROS</div>`;
+  for (const [mid, m] of Object.entries(state.macros)) {
+    h += `<div class="sb-item" onclick="modalEditMacro('${mid}')">${m.name||mid}</div>`;
+  }
+  h += `<div class="sb-item sb-add" onclick="modalCreateMacro()">+ Macro</div>`;
+
+  // Routines
+  h += `<div class="sb-header">ROUTINES</div>`;
+  for (const [rid, r] of Object.entries(state.routines)) {
+    const cd = r.countdown != null ? `${Math.round(r.countdown)}s` : (r.enabled ? 'pending' : 'off');
+    const icon = r.enabled ? '&#x21bb;' : '&#x25a1;';
+    h += `<div class="sb-item" onclick="modalEditRoutine('${rid}')">${icon} ${r.name||rid} <span style="color:var(--dim)">[${cd}]</span></div>`;
+  }
+  h += `<div class="sb-item sb-add" onclick="modalCreateRoutine()">+ Routine</div>`;
+
+  // Daemon
+  h += `<div class="sb-header">DAEMON</div>`;
+  h += `<div class="sb-item" id="daemon-toggle"></div>`;
+  h += `<div id="daemon-log-area"></div>`;
+  sb.innerHTML = h;
+  updateDaemonUI();
+}
+
+async function updateDaemonUI() {
+  try {
+    const ds = await GET('/daemon/status');
+    const el = document.getElementById('daemon-toggle');
+    if (el) {
+      el.innerHTML = ds.active
+        ? `<span style="color:var(--green)">&#x25cf;</span> Routines: running`
+        : `<span style="color:var(--dim)">&#x25cb;</span> Routines: stopped`;
+      el.onclick = () => toggleDaemon(ds.active);
+    }
+    const logEl = document.getElementById('daemon-log-area');
+    if (logEl) logEl.innerHTML = ds.log.slice(-3).map(l => `<div class="daemon-log">${esc(l)}</div>`).join('');
+  } catch(e) {}
+}
+
+async function toggleDaemon(isActive) {
+  try {
+    if (isActive) await POST('/daemon/stop');
+    else await POST('/daemon/start');
+    status(isActive ? 'Daemon stopped' : 'Daemon started', 'var(--green)');
+    updateDaemonUI();
+  } catch(e) { status('Error: '+e.message, 'var(--red)'); }
+}
+
+// ── Dashboard switching ──
+function switchDashboard(did) {
+  currentDashboard = did;
+  PUT('/dashboards/active', {id:did}).catch(()=>{});
+  disconnectAllTerminals();
+  renderSidebar();
+  renderPanels();
+}
+
+// ── Panels ──
+function renderPanels() {
+  if (focusedSession) return; // in terminal mode
+  const grid = document.getElementById('panel-grid');
+  const dbSessions = state.dashboards[currentDashboard]?.sessions || [];
+  let h = '';
+  for (const sid of dbSessions) {
+    const s = state.sessions[sid];
+    if (!s) continue;
+    const badge = s.health || 'stopped';
+    const content = panelContent[sid] || (s.running ? 'Loading...' : '(stopped)');
+    h += `<div class="panel" onclick="enterTerminal('${sid}')">
+      <div class="panel-header">
+        <span class="panel-title">${esc(s.name||sid)}</span>
+        <span class="panel-badge badge-${badge}">${badge.replace('_',' ').toUpperCase()}</span>
+      </div>
+      <div class="panel-body" id="pbody-${sid}">${esc(content)}</div>
+    </div>`;
+  }
+  if (!h) h = '<div style="color:var(--dim);padding:40px;text-align:center">No sessions in this dashboard</div>';
+  grid.innerHTML = h;
+  grid.style.display = 'grid';
+  document.getElementById('terminal-view').classList.remove('active');
+  connectDashboardTerminals();
+}
+
+function connectDashboardTerminals() {
+  const dbSessions = state.dashboards[currentDashboard]?.sessions || [];
+  // Connect WS for each running session
+  for (const sid of dbSessions) {
+    const s = state.sessions[sid];
+    if (s && s.running && !terminalWs[sid]) connectTerminalWs(sid);
+  }
+}
+
+function connectTerminalWs(sid) {
+  if (terminalWs[sid]) return;
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  const ws = new WebSocket(`${proto}//${location.host}/ws/terminal/${sid}`);
+  ws.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+    if (msg.type === 'output') {
+      panelContent[sid] = msg.content;
+      // Update panel body if visible
+      const el = document.getElementById(`pbody-${sid}`);
+      if (el) { el.textContent = msg.content; el.scrollTop = el.scrollHeight; }
+      // Update terminal view if focused
+      if (focusedSession === sid) {
+        const out = document.getElementById('terminal-output');
+        out.textContent = msg.content;
+        out.scrollTop = out.scrollHeight;
+        updateTerminalHealth({health: msg.health, running: msg.running});
+      }
+      // Update health in state
+      if (state.sessions[sid]) {
+        state.sessions[sid].health = msg.health;
+        state.sessions[sid].running = msg.running;
+      }
+    }
+  };
+  ws.onclose = () => { delete terminalWs[sid]; };
+  terminalWs[sid] = ws;
+}
+
+function disconnectAllTerminals() {
+  for (const [sid, ws] of Object.entries(terminalWs)) { ws.close(); }
+  terminalWs = {};
+}
+
+// ── State WebSocket ──
+function connectStateWs() {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  stateWs = new WebSocket(`${proto}//${location.host}/ws/state`);
+  stateWs.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+    if (msg.type === 'state') {
+      // Update session states
+      for (const [sid, st] of Object.entries(msg.sessions||{})) {
+        if (state.sessions[sid]) {
+          state.sessions[sid].running = st.running;
+          state.sessions[sid].health = st.health;
+        }
+        // Connect terminal WS for newly running sessions
+        if (st.running && !terminalWs[sid]) {
+          const dbSessions = state.dashboards[currentDashboard]?.sessions || [];
+          if (dbSessions.includes(sid) || focusedSession === sid) connectTerminalWs(sid);
+        }
+      }
+      // Update routine countdowns
+      for (const [rid, rt] of Object.entries(msg.routines||{})) {
+        if (state.routines[rid]) {
+          state.routines[rid].countdown = rt.countdown;
+          state.routines[rid].enabled = rt.enabled;
+        }
+      }
+      // Update sidebar routine countdowns and health badges without full re-render
+      updatePanelBadges();
+      updateDaemonUI();
+    }
+  };
+  stateWs.onclose = () => { setTimeout(connectStateWs, 3000); };
+}
+
+function updatePanelBadges() {
+  const dbSessions = state.dashboards[currentDashboard]?.sessions || [];
+  for (const sid of dbSessions) {
+    const s = state.sessions[sid];
+    if (!s) continue;
+    const panel = document.querySelector(`[onclick="enterTerminal('${sid}')"]`);
+    if (panel) {
+      const badge = panel.querySelector('.panel-badge');
+      if (badge) {
+        const h = s.health || 'stopped';
+        badge.className = `panel-badge badge-${h}`;
+        badge.textContent = h.replace('_',' ').toUpperCase();
+      }
+    }
+  }
+}
+
+// ── Terminal Monitor View ──
+function enterTerminal(sid) {
+  focusedSession = sid;
+  const s = state.sessions[sid];
+  document.getElementById('panel-grid').style.display = 'none';
+  document.getElementById('terminal-view').classList.add('active');
+  document.getElementById('terminal-title').innerHTML = `<span style="color:var(--cyan)">${esc(s?.name||sid)}</span> <span style="color:var(--dim)">[${sid}]</span>`;
+  document.getElementById('terminal-output').textContent = panelContent[sid] || '';
+
+  // Show tmux attach command
+  const prefix = 'ta'; // matches config.settings.tmux_prefix
+  document.getElementById('tmux-attach-cmd').textContent = `tmux attach -t ${prefix}-${sid}`;
+
+  // Update health badge
+  updateTerminalHealth(s);
+
+  // Show/hide start/stop buttons
+  document.getElementById('btn-start').style.display = s?.running ? 'none' : '';
+  document.getElementById('btn-stop').style.display = s?.running ? '' : 'none';
+
+  // Focus the command input
+  document.getElementById('term-cmd-input').value = '';
+  document.getElementById('term-cmd-input').focus();
+
+  if (!terminalWs[sid]) connectTerminalWs(sid);
+  // Request more lines for terminal view
+  if (terminalWs[sid]?.readyState === 1) {
+    terminalWs[sid].send(JSON.stringify({type:'resize', lines:60}));
+  }
+}
+
+function updateTerminalHealth(s) {
+  const badge = document.getElementById('terminal-health');
+  if (!badge) return;
+  const h = s?.health || 'stopped';
+  badge.className = `panel-badge badge-${h}`;
+  badge.textContent = h.replace('_',' ').toUpperCase();
+}
+
+function exitTerminal() {
+  if (!focusedSession) return;
+  // Reset to 20 lines for panel view
+  if (terminalWs[focusedSession]?.readyState === 1) {
+    terminalWs[focusedSession].send(JSON.stringify({type:'resize', lines:20}));
+  }
+  focusedSession = null;
+  renderPanels();
+}
+
+function copyTmuxCmd() {
+  const cmd = document.getElementById('tmux-attach-cmd').textContent;
+  navigator.clipboard.writeText(cmd).then(() => {
+    const toast = document.getElementById('copied-toast');
+    toast.classList.add('show');
+    setTimeout(() => toast.classList.remove('show'), 1500);
+    status('Copied: ' + cmd, 'var(--green)');
+  }).catch(() => {
+    // Fallback: select the text
+    const el = document.getElementById('tmux-attach-cmd');
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    window.getSelection().removeAllRanges();
+    window.getSelection().addRange(range);
+    status('Select and copy the command', 'var(--yellow)');
+  });
+}
+
+// Send typed command
+function sendTermCmd() {
+  const input = document.getElementById('term-cmd-input');
+  const text = input.value;
+  if (!text || !focusedSession) return;
+  input.value = '';
+  POST(`/sessions/${focusedSession}/send-keys`, {keys:text, enter:true})
+    .then(() => status(`Sent: ${text}`, 'var(--green)'))
+    .catch(e => status('Error: '+e.message, 'var(--red)'));
+  input.focus();
+}
+
+document.getElementById('term-cmd-input').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') { e.preventDefault(); sendTermCmd(); }
+  if (e.key === 'Escape') { e.preventDefault(); exitTerminal(); }
+});
+
+async function sendSpecial(key) {
+  if (!focusedSession) return;
+  try {
+    await POST(`/sessions/${focusedSession}/send-special-key`, {key});
+    status(`Sent ${key}`, 'var(--green)');
+  } catch(err) { status('Error: '+err.message, 'var(--red)'); }
+}
+
+async function doStartFocused() {
+  if (!focusedSession) return;
+  try {
+    await POST(`/sessions/${focusedSession}/start`);
+    status(`${focusedSession} started`, 'var(--green)');
+    await loadAll();
+    enterTerminal(focusedSession);
+  } catch(e) { status('Error: '+e.message, 'var(--red)'); }
+}
+
+async function doStopFocused() {
+  if (!focusedSession) return;
+  try {
+    await POST(`/sessions/${focusedSession}/stop`);
+    status(`${focusedSession} stopped`, 'var(--yellow)');
+    await loadAll();
+    enterTerminal(focusedSession);
+  } catch(e) { status('Error: '+e.message, 'var(--red)'); }
+}
+
+async function promptSendMacro() {
+  if (!focusedSession) return;
+  const macroEntries = Object.entries(state.macros);
+  if (!macroEntries.length) { status('No macros defined', 'var(--yellow)'); return; }
+  let h = `<h2>Send Macro to ${esc(focusedSession)}</h2>`;
+  for (const [mid, m] of macroEntries) {
+    h += `<div class="sb-item" style="padding:8px 12px;cursor:pointer" onclick="doSendMacro('${mid}','${focusedSession}')">${esc(m.name||mid)} <span style="color:var(--dim)">[${m.send_when||'always'}]</span></div>`;
+  }
+  h += `<div class="btn-row"><button onclick="closeModal()">Cancel</button></div>`;
+  showModal(h);
+}
+async function doSendMacro(mid, sid) {
+  try {
+    await POST(`/macros/${mid}/send/${sid}`);
+    closeModal(); status('Macro sent', 'var(--green)');
+  } catch(e) { status('Error: '+e.message, 'var(--red)'); }
+}
+
+// ── Modals ──
+function esc(s) { if (!s) return ''; const d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
+
+function showModal(html) {
+  document.getElementById('modal-root').innerHTML = `<div class="modal-overlay" onclick="if(event.target===this)closeModal()"><div class="modal">${html}</div></div>`;
+}
+function closeModal() { document.getElementById('modal-root').innerHTML = ''; }
+
+// Create Session
+async function modalCreateSession() {
+  const dbs = Object.entries(state.dashboards).map(([id,d])=>`<option value="${id}" ${id===currentDashboard?'selected':''}>${esc(d.name||id)}</option>`).join('');
+  let varsHtml = state.sessionVars.map(v => `<div class="field"><label>${esc(v.label||v.name)}</label><input id="sv-${v.name}" placeholder="${esc(v.name)}"/></div>`).join('');
+  showModal(`<h2>Create Session</h2>
+    <div class="field"><label>Session ID</label><input id="m-id" placeholder="e.g. my-project"/></div>
+    <div class="field"><label>Display Name</label><input id="m-name" placeholder="e.g. My Project"/></div>
+    <div class="field"><label>Working Directory</label><input id="m-workdir" placeholder="/home/ubuntu/..."/></div>
+    <div class="field"><label>Dashboard</label><select id="m-dashboard">${dbs}</select></div>
+    ${varsHtml}
+    <div class="btn-row"><button class="primary" onclick="doCreateSession()">Create</button><button onclick="closeModal()">Cancel</button></div>`);
+}
+async function doCreateSession() {
+  const vars = {};
+  state.sessionVars.forEach(v => { const val = document.getElementById('sv-'+v.name)?.value; if(val) vars[v.name]=val; });
+  try {
+    await POST('/sessions', { id:gv('m-id'), name:gv('m-name')||null, working_dir:gv('m-workdir')||null, dashboard_id:gv('m-dashboard'), vars:Object.keys(vars).length?vars:null });
+    closeModal(); status('Session created','var(--green)'); await loadAll();
+  } catch(e) { status('Error: '+e.message,'var(--red)'); }
+}
+
+// Edit Session
+async function modalEditSession(sid) {
+  const s = state.sessions[sid]; if(!s) return;
+  const dbs = Object.entries(state.dashboards).map(([id,d])=>`<option value="${id}">${esc(d.name||id)}</option>`).join('');
+  const curDb = await GET(`/sessions/${sid}/dashboard`).then(r=>r.dashboard_id).catch(()=>null);
+  let varsHtml = state.sessionVars.map(v => `<div class="field"><label>${esc(v.label||v.name)}</label><input id="sv-${v.name}" value="${esc(s.vars?.[v.name]||'')}" placeholder="${esc(v.name)}"/></div>`).join('');
+  showModal(`<h2>Edit: ${esc(sid)}</h2>
+    <div class="field"><label>Name</label><input id="m-name" value="${esc(s.name||'')}"/></div>
+    <div class="field"><label>Working Directory</label><input id="m-workdir" value="${esc(s.working_dir||'')}"/></div>
+    <div class="field"><label>Dashboard</label><select id="m-dashboard">${dbs}</select></div>
+    ${varsHtml}
+    <div class="btn-row">
+      <button class="primary" onclick="doEditSession('${sid}')">Save</button>
+      ${s.running?`<button onclick="doStopSession('${sid}')">Stop</button>`:`<button onclick="doStartSession('${sid}')">Start</button>`}
+      <button class="danger" onclick="doDeleteSession('${sid}')">Delete</button>
+      <button onclick="closeModal()">Cancel</button>
+    </div>`);
+  if(curDb) document.getElementById('m-dashboard').value = curDb;
+}
+async function doEditSession(sid) {
+  const vars = {};
+  state.sessionVars.forEach(v => { const val = document.getElementById('sv-'+v.name)?.value; if(val) vars[v.name]=val; });
+  const updates = { name:gv('m-name')||null, working_dir:gv('m-workdir')||null, vars };
+  try {
+    await PATCH(`/sessions/${sid}`, updates);
+    const newDb = gv('m-dashboard');
+    const curDb = await GET(`/sessions/${sid}/dashboard`).then(r=>r.dashboard_id).catch(()=>null);
+    if (newDb && newDb !== curDb) await PUT(`/sessions/${sid}/dashboard`, {new_dashboard_id:newDb});
+    closeModal(); status('Session updated','var(--green)'); await loadAll();
+  } catch(e) { status('Error: '+e.message,'var(--red)'); }
+}
+async function doStartSession(sid) { try { await POST(`/sessions/${sid}/start`); closeModal(); status(`${sid} started`,'var(--green)'); await loadAll(); } catch(e) { status('Error: '+e.message,'var(--red)'); } }
+async function doStopSession(sid) { try { await POST(`/sessions/${sid}/stop`); closeModal(); status(`${sid} stopped`,'var(--yellow)'); await loadAll(); } catch(e) { status('Error: '+e.message,'var(--red)'); } }
+async function doDeleteSession(sid) { if(!confirm(`Delete session '${sid}'?`)) return; try { await DEL(`/sessions/${sid}`); closeModal(); status(`${sid} deleted`,'var(--yellow)'); await loadAll(); } catch(e) { status('Error: '+e.message,'var(--red)'); } }
+
+// Create/Edit Dashboard
+function modalCreateDashboard() {
+  showModal(`<h2>Create Dashboard</h2>
+    <div class="field"><label>Dashboard ID</label><input id="m-id" placeholder="e.g. dev"/></div>
+    <div class="field"><label>Name</label><input id="m-name" placeholder="e.g. Development"/></div>
+    <div class="btn-row"><button class="primary" onclick="doCreateDashboard()">Create</button><button onclick="closeModal()">Cancel</button></div>`);
+}
+async function doCreateDashboard() { try { await POST('/dashboards',{id:gv('m-id'),name:gv('m-name')||null}); closeModal(); status('Dashboard created','var(--green)'); await loadAll(); } catch(e) { status('Error: '+e.message,'var(--red)'); } }
+
+// Create/Edit Macro
+function modalCreateMacro() {
+  const varHint = state.sessionVars.length ? `<div class="hint">Available vars: ${state.sessionVars.map(v=>'$'+v.name).join(', ')}</div>` : '';
+  showModal(`<h2>Create Macro</h2>
+    <div class="field"><label>Macro ID</label><input id="m-id" placeholder="e.g. start-dev"/></div>
+    <div class="field"><label>Name</label><input id="m-name" placeholder="e.g. Start Dev"/></div>
+    <div class="field"><label>Keys</label><textarea id="m-keys" rows="4" placeholder="Commands to send..."></textarea>${varHint}</div>
+    <div class="field"><label>Send when</label><select id="m-sendwhen"><option value="always">Always</option><option value="idle">Session idle</option><option value="claude_ready">Claude Code ready</option></select></div>
+    <div class="field"><label><input type="checkbox" id="m-enter" checked style="width:auto;margin-right:6px"/>Send Enter</label></div>
+    <div class="btn-row"><button class="primary" onclick="doCreateMacro()">Create</button><button onclick="closeModal()">Cancel</button></div>`);
+}
+async function doCreateMacro() { try { await POST('/macros',{id:gv('m-id'),name:gv('m-name'),keys:gv('m-keys'),enter:document.getElementById('m-enter').checked,send_when:gv('m-sendwhen')}); closeModal(); status('Macro created','var(--green)'); await loadAll(); } catch(e) { status('Error: '+e.message,'var(--red)'); } }
+
+async function modalEditMacro(mid) {
+  const m = state.macros[mid]; if(!m) return;
+  const varHint = state.sessionVars.length ? `<div class="hint">Available vars: ${state.sessionVars.map(v=>'$'+v.name).join(', ')}</div>` : '';
+  showModal(`<h2>Edit: ${esc(mid)}</h2>
+    <div class="field"><label>Name</label><input id="m-name" value="${esc(m.name||'')}"/></div>
+    <div class="field"><label>Keys</label><textarea id="m-keys" rows="4">${esc(m.keys||'')}</textarea>${varHint}</div>
+    <div class="field"><label>Send when</label><select id="m-sendwhen"><option value="always"${m.send_when==='always'?' selected':''}>Always</option><option value="idle"${m.send_when==='idle'?' selected':''}>Session idle</option><option value="claude_ready"${m.send_when==='claude_ready'?' selected':''}>Claude Code ready</option></select></div>
+    <div class="field"><label><input type="checkbox" id="m-enter" ${m.enter!==false?'checked':''} style="width:auto;margin-right:6px"/>Send Enter</label></div>
+    <div class="btn-row"><button class="primary" onclick="doEditMacro('${mid}')">Save</button><button class="danger" onclick="doDeleteMacro('${mid}')">Delete</button><button onclick="closeModal()">Cancel</button></div>`);
+}
+async function doEditMacro(mid) { try { await PATCH(`/macros/${mid}`,{name:gv('m-name'),keys:gv('m-keys'),enter:document.getElementById('m-enter').checked,send_when:gv('m-sendwhen')}); closeModal(); status('Macro updated','var(--green)'); await loadAll(); } catch(e) { status('Error: '+e.message,'var(--red)'); } }
+async function doDeleteMacro(mid) { if(!confirm(`Delete macro '${mid}'?`)) return; try { await DEL(`/macros/${mid}`); closeModal(); status('Macro deleted','var(--yellow)'); await loadAll(); } catch(e) { status('Error: '+e.message,'var(--red)'); } }
+
+// Create/Edit Routine
+function modalCreateRoutine() {
+  const scriptOpts = state.scripts.map(s=>`<option value="${s}">${s}</option>`).join('');
+  const macroOpts = Object.entries(state.macros).map(([id,m])=>`<option value="${id}">${esc(m.name||id)}</option>`).join('');
+  const sessionOpts = `<option value="*">* (all sessions)</option>` + Object.entries(state.sessions).map(([id,s])=>`<option value="${id}">${esc(s.name||id)}</option>`).join('');
+  showModal(`<h2>Create Routine</h2>
+    <div class="field"><label>Routine ID</label><input id="m-id" placeholder="e.g. auto-approve"/></div>
+    <div class="field"><label>Name</label><input id="m-name" placeholder="e.g. Auto Approve"/></div>
+    <div class="field"><label>Type</label><select id="m-type"><option value="script">Script</option><option value="macro">Macro</option></select></div>
+    <div class="field"><label>Script</label><select id="m-script"><option value="">Select...</option>${scriptOpts}</select></div>
+    <div class="field"><label>Macro</label><select id="m-macro"><option value="">Select...</option>${macroOpts}</select></div>
+    <div class="field"><label>Target Session</label><select id="m-session">${sessionOpts}</select></div>
+    <div class="field"><label>Interval (seconds)</label><input id="m-interval" type="number" value="30"/></div>
+    <div class="field"><label>Send when</label><select id="m-sendwhen"><option value="idle">Session idle</option><option value="always">Always</option><option value="claude_ready">Claude Code ready</option></select></div>
+    <div class="field"><label>Run when process (optional)</label><input id="m-process" placeholder="e.g. claude"/></div>
+    <div class="field"><label><input type="checkbox" id="m-enabled" checked style="width:auto;margin-right:6px"/>Enabled</label></div>
+    <div class="btn-row"><button class="primary" onclick="doCreateRoutine()">Create</button><button onclick="closeModal()">Cancel</button></div>`);
+}
+async function doCreateRoutine() {
+  const type = gv('m-type');
+  try {
+    await POST('/routines',{ id:gv('m-id'), name:gv('m-name'), script:type==='script'?gv('m-script'):null, macro:type==='macro'?gv('m-macro'):null,
+      session:gv('m-session'), interval_seconds:parseInt(gv('m-interval'))||30, enabled:document.getElementById('m-enabled').checked,
+      send_when:gv('m-sendwhen'), run_when_process:gv('m-process') });
+    closeModal(); status('Routine created','var(--green)'); await loadAll();
+  } catch(e) { status('Error: '+e.message,'var(--red)'); }
+}
+
+async function modalEditRoutine(rid) {
+  const r = state.routines[rid]; if(!r) return;
+  const scriptOpts = state.scripts.map(s=>`<option value="${s}"${r.script===s?' selected':''}>${s}</option>`).join('');
+  const macroOpts = Object.entries(state.macros).map(([id,m])=>`<option value="${id}"${r.macro===id?' selected':''}>${esc(m.name||id)}</option>`).join('');
+  const sessionOpts = `<option value="*"${r.session==='*'?' selected':''}>* (all sessions)</option>` + Object.entries(state.sessions).map(([id,s])=>`<option value="${id}"${r.session===id?' selected':''}>${esc(s.name||id)}</option>`).join('');
+  showModal(`<h2>Edit: ${esc(rid)}</h2>
+    <div class="field"><label>Name</label><input id="m-name" value="${esc(r.name||'')}"/></div>
+    <div class="field"><label>Type</label><select id="m-type"><option value="script"${r.type==='script'?' selected':''}>Script</option><option value="macro"${r.type==='macro'?' selected':''}>Macro</option></select></div>
+    <div class="field"><label>Script</label><select id="m-script"><option value="">Select...</option>${scriptOpts}</select></div>
+    <div class="field"><label>Macro</label><select id="m-macro"><option value="">Select...</option>${macroOpts}</select></div>
+    <div class="field"><label>Target Session</label><select id="m-session">${sessionOpts}</select></div>
+    <div class="field"><label>Interval (seconds)</label><input id="m-interval" type="number" value="${r.interval_seconds||30}"/></div>
+    <div class="field"><label>Send when</label><select id="m-sendwhen"><option value="always"${r.send_when==='always'?' selected':''}>Always</option><option value="idle"${r.send_when==='idle'?' selected':''}>Session idle</option><option value="claude_ready"${r.send_when==='claude_ready'?' selected':''}>Claude Code ready</option></select></div>
+    <div class="field"><label>Run when process</label><input id="m-process" value="${esc(r.run_when_process||'')}"/></div>
+    <div class="field"><label><input type="checkbox" id="m-enabled" ${r.enabled?'checked':''} style="width:auto;margin-right:6px"/>Enabled</label></div>
+    <div class="btn-row"><button class="primary" onclick="doEditRoutine('${rid}')">Save</button><button class="danger" onclick="doDeleteRoutine('${rid}')">Delete</button><button onclick="closeModal()">Cancel</button></div>`);
+}
+async function doEditRoutine(rid) {
+  const type = gv('m-type');
+  try {
+    await PATCH(`/routines/${rid}`,{ name:gv('m-name'), type, script:type==='script'?gv('m-script'):null, macro:type==='macro'?gv('m-macro'):null,
+      session:gv('m-session'), interval_seconds:parseInt(gv('m-interval'))||30, enabled:document.getElementById('m-enabled').checked,
+      send_when:gv('m-sendwhen'), run_when_process:gv('m-process') });
+    closeModal(); status('Routine updated','var(--green)'); await loadAll();
+  } catch(e) { status('Error: '+e.message,'var(--red)'); }
+}
+async function doDeleteRoutine(rid) { if(!confirm(`Delete routine '${rid}'?`)) return; try { await DEL(`/routines/${rid}`); closeModal(); status('Routine deleted','var(--yellow)'); await loadAll(); } catch(e) { status('Error: '+e.message,'var(--red)'); } }
+
+// Session Vars
+async function modalSessionVars() {
+  let rows = state.sessionVars.map((v,i) => `<div class="var-row"><input id="svn-${i}" value="${esc(v.name)}" placeholder="var_name"/><input id="svl-${i}" value="${esc(v.label)}" placeholder="Label"/><button class="danger" onclick="this.parentElement.remove()">x</button></div>`).join('');
+  showModal(`<h2>Session Variables</h2>
+    <div class="hint" style="margin-bottom:10px">Define variables available on all sessions. Use $var_name in macros.</div>
+    <div id="sv-rows">${rows}</div>
+    <button onclick="addSvRow()" style="margin:8px 0">+ Add Variable</button>
+    <div class="btn-row"><button class="primary" onclick="doSaveSessionVars()">Save</button><button onclick="closeModal()">Cancel</button></div>`);
+}
+let svCounter = 100;
+function addSvRow() {
+  svCounter++;
+  const div = document.createElement('div'); div.className='var-row';
+  div.innerHTML = `<input id="svn-${svCounter}" placeholder="var_name"/><input id="svl-${svCounter}" placeholder="Label"/><button class="danger" onclick="this.parentElement.remove()">x</button>`;
+  document.getElementById('sv-rows').appendChild(div);
+}
+async function doSaveSessionVars() {
+  // Delete all existing, then re-add
+  for (const v of state.sessionVars) { try { await DEL(`/session-vars/${v.name}`); } catch(e){} }
+  const rows = document.querySelectorAll('#sv-rows .var-row');
+  for (const row of rows) {
+    const inputs = row.querySelectorAll('input');
+    const name = inputs[0]?.value.trim();
+    const label = inputs[1]?.value.trim();
+    if (name) { try { await POST('/session-vars', {name, label:label||name}); } catch(e){} }
+  }
+  closeModal(); status('Session vars saved','var(--green)'); await loadAll();
+}
+
+// Scripts
+async function modalEditScript(name) {
+  try {
+    const s = await GET(`/scripts/${name}`);
+    showModal(`<h2>Script: ${esc(name)}</h2>
+      <div class="field"><textarea id="m-content" rows="16" style="font-size:12px">${esc(s.content)}</textarea></div>
+      <div class="btn-row"><button class="primary" onclick="doSaveScript('${name}')">Save</button><button class="danger" onclick="doDeleteScript('${name}')">Delete</button><button onclick="closeModal()">Cancel</button></div>`);
+  } catch(e) { status('Error: '+e.message,'var(--red)'); }
+}
+async function doSaveScript(name) { try { await PUT(`/scripts/${name}`,{content:gv('m-content')}); closeModal(); status('Script saved','var(--green)'); } catch(e) { status('Error: '+e.message,'var(--red)'); } }
+async function doDeleteScript(name) { if(!confirm(`Delete script '${name}'?`)) return; try { await DEL(`/scripts/${name}`); closeModal(); status('Script deleted','var(--yellow)'); await loadAll(); } catch(e) { status('Error: '+e.message,'var(--red)'); } }
+function modalCreateScript() {
+  showModal(`<h2>Create Script</h2>
+    <div class="field"><label>Name</label><input id="m-name" placeholder="e.g. my-script"/></div>
+    <div class="field"><label>Content</label><textarea id="m-content" rows="12" style="font-size:12px">def run(session_id, tmux):\n    content = tmux.capture_pane(session_id)\n    return {"status": "ok"}</textarea></div>
+    <div class="btn-row"><button class="primary" onclick="doCreateNewScript()">Create</button><button onclick="closeModal()">Cancel</button></div>`);
+}
+async function doCreateNewScript() { try { await PUT(`/scripts/${gv('m-name')}`,{content:gv('m-content')}); closeModal(); status('Script created','var(--green)'); await loadAll(); } catch(e) { status('Error: '+e.message,'var(--red)'); } }
+
+// Helper
+function gv(id) { return document.getElementById(id)?.value||''; }
+
+// ── Keyboard shortcuts ──
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && focusedSession) { exitTerminal(); e.preventDefault(); return; }
+  if (e.key === 'Escape' && document.querySelector('.modal-overlay')) { closeModal(); e.preventDefault(); }
+});
+
+// ── Init ──
+loadAll();
+connectStateWs();
+</script>
+</body>
+</html>

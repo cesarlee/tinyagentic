@@ -110,6 +110,43 @@ def capture_pane(session_id, lines=200):
     return result.stdout
 
 
+def capture_pane_ansi(session_id, lines=200):
+    """Capture pane with ANSI escape sequences preserved (for xterm.js)."""
+    session_name = _session_name(session_id)
+    result = subprocess.run(
+        ["tmux", "capture-pane", "-t", session_name, "-p", "-e", "-S", f"-{lines}"],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"Failed to capture pane: {result.stderr}")
+    return result.stdout
+
+
+def get_pane_size(session_id):
+    """Return (cols, rows) of the session's pane."""
+    session_name = _session_name(session_id)
+    result = subprocess.run(
+        ["tmux", "display-message", "-p", "-t", session_name,
+         "#{pane_width} #{pane_height}"],
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return (80, 24)
+    parts = result.stdout.strip().split()
+    return (int(parts[0]), int(parts[1])) if len(parts) == 2 else (80, 24)
+
+
+def resize_pane(session_id, cols, rows):
+    """Resize the tmux pane to the given dimensions."""
+    session_name = _session_name(session_id)
+    subprocess.run(
+        ["tmux", "resize-window", "-t", session_name, "-x", str(cols), "-y", str(rows)],
+        capture_output=True,
+    )
+
+
 def send_keys(session_id, keys, enter=True):
     session_name = _session_name(session_id)
     subprocess.run(

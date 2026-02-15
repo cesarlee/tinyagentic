@@ -73,6 +73,14 @@ label { color:var(--fg2); font-size:12px; margin-bottom:2px; display:block; }
 #term-cmd-input { flex:1; font-size:13px; }
 #terminal-actions { display:flex; gap:6px; padding:6px 12px; background:var(--bg2); border-top:1px solid var(--bg3); align-items:center; flex-shrink:0; flex-wrap:wrap; }
 
+/* Interactive mode */
+#terminal-view.interactive #terminal-output { border:2px solid var(--green); border-radius:4px; }
+#terminal-view.interactive #terminal-input-bar { display:none; }
+#terminal-view.interactive #terminal-actions { display:none; }
+#interactive-banner { display:none; padding:6px 12px; background:var(--green); color:#1a1b26; font-size:12px; font-weight:600; text-align:center; flex-shrink:0; }
+#terminal-view.interactive #interactive-banner { display:block; }
+button.interactive-on { background:var(--green) !important; border-color:var(--green) !important; color:#1a1b26 !important; }
+
 /* Modal */
 .modal-overlay { position:fixed; inset:0; background:rgba(0,0,0,0.6); display:flex; align-items:center; justify-content:center; z-index:100; }
 .modal { background:var(--bg2); border:1px solid var(--dim); border-radius:8px; padding:20px; min-width:400px; max-width:600px; max-height:80vh; overflow-y:auto; }
@@ -103,6 +111,7 @@ label { color:var(--fg2); font-size:12px; margin-bottom:2px; display:block; }
           <span id="terminal-title"></span>
           <div style="display:flex;gap:6px;align-items:center;">
             <span id="terminal-health" class="panel-badge badge-stopped"></span>
+            <button id="btn-interactive" onclick="toggleInteractive()">Interactive</button>
             <button onclick="exitTerminal()">Back (Esc)</button>
           </div>
         </div>
@@ -114,6 +123,7 @@ label { color:var(--fg2); font-size:12px; margin-bottom:2px; display:block; }
           <button onclick="doStartFocused();" id="btn-start" style="display:none">Start</button>
           <button onclick="doStopFocused();" id="btn-stop" style="display:none">Stop</button>
         </div>
+        <div id="interactive-banner">INTERACTIVE MODE — All keystrokes are sent to the session. Press Ctrl+Shift+I to exit.</div>
         <div id="terminal-output"></div>
         <div id="terminal-input-bar">
           <span style="color:var(--cyan)">&#10095;</span>
@@ -428,6 +438,8 @@ function updateTerminalHealth(s) {
 
 function exitTerminal() {
   if (!focusedSession) return;
+  // Turn off interactive mode if on
+  if (interactiveMode) toggleInteractive();
   // Reset to 20 lines for panel view
   if (terminalWs[focusedSession]?.readyState === 1) {
     terminalWs[focusedSession].send(JSON.stringify({type:'resize', lines:20}));
@@ -516,6 +528,128 @@ async function doSendMacro(mid, sid) {
     closeModal(); status('Macro sent', 'var(--green)');
   } catch(e) { status('Error: '+e.message, 'var(--red)'); }
 }
+
+// ── Interactive Mode ──
+let interactiveMode = false;
+
+function toggleInteractive() {
+  interactiveMode = !interactiveMode;
+  const view = document.getElementById('terminal-view');
+  const btn = document.getElementById('btn-interactive');
+  if (interactiveMode) {
+    view.classList.add('interactive');
+    btn.classList.add('interactive-on');
+    btn.textContent = 'Exit Interactive';
+    status('Interactive mode ON — all keystrokes sent to session', 'var(--green)');
+  } else {
+    view.classList.remove('interactive');
+    btn.classList.remove('interactive-on');
+    btn.textContent = 'Interactive';
+    status('Interactive mode OFF', 'var(--dim)');
+  }
+}
+
+document.addEventListener('keydown', (e) => {
+  if (!interactiveMode || !focusedSession) return;
+
+  // Ctrl+Shift+I toggles off
+  if (e.ctrlKey && e.shiftKey && e.key === 'I') {
+    e.preventDefault();
+    toggleInteractive();
+    return;
+  }
+
+  // Don't capture if a modal is open
+  if (document.querySelector('.modal-overlay')) return;
+
+  // Map the key event
+  const key = mapKeyEvent(e);
+  if (key) {
+    e.preventDefault();
+    e.stopPropagation();
+    sendInteractiveKey(key);
+  }
+});
+
+function mapKeyEvent(e) {
+  // Ctrl+key combos
+  if (e.ctrlKey && !e.shiftKey && !e.altKey && !e.metaKey) {
+    const letter = e.key.toLowerCase();
+    if (letter.length === 1 && letter >= 'a' && letter <= 'z') {
+      return {type: 'special', key: `C-${letter}`};
+    }
+  }
+
+  // Alt+key combos
+  if (e.altKey && !e.ctrlKey && !e.shiftKey && !e.metaKey) {
+    const letter = e.key.toLowerCase();
+    if (letter.length === 1 && letter >= 'a' && letter <= 'z') {
+      return {type: 'special', key: `M-${letter}`};
+    }
+  }
+
+  // Special keys
+  const specialMap = {
+    'Enter': 'Enter',
+    'Backspace': 'BSpace',
+    'Tab': 'Tab',
+    'Escape': 'Escape',
+    'ArrowUp': 'Up',
+    'ArrowDown': 'Down',
+    'ArrowLeft': 'Left',
+    'ArrowRight': 'Right',
+    'Home': 'Home',
+    'End': 'End',
+    'PageUp': 'PageUp',
+    'PageDown': 'PageDown',
+    'Delete': 'DC',
+    'Insert': 'Insert',
+    'F1': 'F1', 'F2': 'F2', 'F3': 'F3', 'F4': 'F4',
+    'F5': 'F5', 'F6': 'F6', 'F7': 'F7', 'F8': 'F8',
+    'F9': 'F9', 'F10': 'F10', 'F11': 'F11', 'F12': 'F12',
+  };
+
+  if (specialMap[e.key]) {
+    return {type: 'special', key: specialMap[e.key]};
+  }
+
+  // Regular characters (single printable char, no modifier except shift)
+  if (e.key.length === 1 && !e.ctrlKey && !e.altKey && !e.metaKey) {
+    return {type: 'text', text: e.key};
+  }
+
+  // Space
+  if (e.key === ' ') {
+    return {type: 'text', text: ' '};
+  }
+
+  return null; // Unhandled, let browser handle it
+}
+
+// Batch text input to reduce API calls
+let textBuffer = '';
+let textTimer = null;
+
+function sendInteractiveKey(key) {
+  if (key.type === 'text') {
+    textBuffer += key.text;
+    if (textTimer) clearTimeout(textTimer);
+    textTimer = setTimeout(flushTextBuffer, 50);
+  } else {
+    // Flush any pending text first, then send the special key
+    flushTextBuffer();
+    POST(`/sessions/${focusedSession}/send-special-key`, {key: key.key}).catch(() => {});
+  }
+}
+
+function flushTextBuffer() {
+  if (textTimer) { clearTimeout(textTimer); textTimer = null; }
+  if (!textBuffer || !focusedSession) { textBuffer = ''; return; }
+  const text = textBuffer;
+  textBuffer = '';
+  POST(`/sessions/${focusedSession}/send-keys`, {keys: text, enter: false}).catch(() => {});
+}
+
 
 // ── Modals ──
 function esc(s) { if (!s) return ''; const d=document.createElement('div'); d.textContent=s; return d.innerHTML; }
@@ -725,6 +859,8 @@ function gv(id) { return document.getElementById(id)?.value||''; }
 
 // ── Keyboard shortcuts ──
 document.addEventListener('keydown', (e) => {
+  // Interactive mode handles its own keys
+  if (interactiveMode) return;
   if (e.key === 'Escape' && focusedSession) { exitTerminal(); e.preventDefault(); return; }
   if (e.key === 'Escape' && document.querySelector('.modal-overlay')) { closeModal(); e.preventDefault(); }
 });

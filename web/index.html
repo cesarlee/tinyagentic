@@ -232,7 +232,7 @@ function renderSidebar() {
   for (const [rid, r] of Object.entries(state.routines)) {
     const cd = r.countdown != null ? `${Math.round(r.countdown)}s` : (r.enabled ? 'pending' : 'off');
     const icon = r.enabled ? '&#x21bb;' : '&#x25a1;';
-    h += `<div class="sb-item" onclick="modalEditRoutine('${rid}')">${icon} ${r.name||rid} <span style="color:var(--dim)">[${cd}]</span></div>`;
+    h += `<div class="sb-item" onclick="modalEditRoutine('${rid}')">${icon} ${r.name||rid} <span id="rcd-${rid}" style="color:var(--dim)">[${cd}]</span></div>`;
   }
   h += `<div class="sb-item sb-add" onclick="modalCreateRoutine()">+ Routine</div>`;
 
@@ -373,11 +373,22 @@ function connectStateWs() {
         }
       }
       // Update sidebar routine countdowns and health badges without full re-render
+      updateRoutineCountdowns();
       updatePanelBadges();
       updateDaemonUI();
     }
   };
   stateWs.onclose = () => { setTimeout(connectStateWs, 3000); };
+}
+
+function updateRoutineCountdowns() {
+  for (const [rid, r] of Object.entries(state.routines)) {
+    const el = document.getElementById(`rcd-${rid}`);
+    if (el) {
+      const cd = r.countdown != null ? `${Math.round(r.countdown)}s` : (r.enabled ? 'pending' : 'off');
+      el.textContent = `[${cd}]`;
+    }
+  }
 }
 
 function updatePanelBadges() {
